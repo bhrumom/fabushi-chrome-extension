@@ -252,7 +252,7 @@ async function requireClaimedTab(targetId) {
   const id = Number(targetId);
   const current = await state();
   if (!Number.isInteger(id) || (!current.claimed.has(id) && !current.automation.has(id))) {
-    throw new Error("Tab has not been claimed by ChatGPT Computer Control.");
+    throw new Error("Tab has not been claimed by Fabushi Computer Control.");
   }
   return { id, current };
 }

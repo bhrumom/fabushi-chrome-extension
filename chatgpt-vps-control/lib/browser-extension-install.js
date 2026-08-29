@@ -90,7 +90,7 @@ export async function installBrowserExtension({ currentPlatform = platform(), ma
   }
   const nativeManifest = {
     name: NATIVE_HOST_NAME,
-    description: "Local bridge for ChatGPT Computer Control",
+    description: "Local bridge for Fabushi Computer Control",
     path: paths.launcher,
     type: "stdio",
     allowed_origins: [`chrome-extension://${metadata.extensionId}/`],

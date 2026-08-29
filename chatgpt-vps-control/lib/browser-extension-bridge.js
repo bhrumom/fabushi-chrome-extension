@@ -91,7 +91,7 @@ export async function startBrowserExtensionBridge() {
     if (platform() !== "win32") {
       const info = await stat(paths.socket).catch(() => null);
       if (info?.isSocket()) {
-        if (await socketIsListening(paths.socket)) throw new Error("Another ChatGPT Computer Control browser bridge is already running for this user.");
+        if (await socketIsListening(paths.socket)) throw new Error("Another Fabushi Computer Control browser bridge is already running for this user.");
         await rm(paths.socket, { force: true });
       }
       else if (info) throw new Error(`Browser extension IPC path is not a socket: ${paths.socket}`);
