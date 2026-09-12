@@ -1,0 +1,8 @@
+.section-intro.userscript-heading{margin-top:24px;border-top:1px solid #f0f1f3;padding-top:18px}
+.import-button{border:0;border-radius:10px;background:#111827;color:white;padding:9px 13px;cursor:pointer;font-size:12px}
+.card-actions{display:flex;align-items:center;gap:7px;flex-wrap:wrap;margin-top:12px}
+.card-action{border:1px solid #d1d5db;border-radius:8px;background:white;color:#374151;padding:6px 9px;font-size:11px;cursor:pointer}
+.card-action.primary{border-color:#111827;background:#111827;color:white}
+.card-action.danger{border-color:#fecaca;color:#b91c1c}
+.card-action:disabled{opacity:.55;cursor:wait}
+.action-hint{font-size:10px;color:#6b7280}

@@ -2,7 +2,8 @@ import { createHash } from "node:crypto";
 import { homedir, platform, userInfo } from "node:os";
 import { join } from "node:path";
 
-export const NATIVE_HOST_NAME = "com.fabushi.chatgpt_computer_control";
+export const NATIVE_HOST_NAME = "com.fabushi.browser_control";
+export const LEGACY_NATIVE_HOST_NAME = "com.fabushi.chatgpt_computer_control";
 
 export function browserExtensionHome() {
   return process.env.COMPUTER_BROWSER_EXTENSION_HOME
@@ -14,7 +15,11 @@ export function browserExtensionPaths() {
   const userKey = createHash("sha256").update(userInfo().username).digest("hex").slice(0, 12);
   return {
     home,
-    extension: join(home, "extension"),
+    // Keep the pre-0.5.0 unpacked Bridge source available until the user has
+    // verified the replacement in every Chrome profile. New Fabushi installs
+    // use a sibling directory so staging cannot overwrite a live old Bridge.
+    extension: join(home, "fabushi-extension"),
+    legacyExtension: join(home, "extension"),
     secret: join(home, "native-host.secret"),
     socket: platform() === "win32"
       ? `\\\\.\\pipe\\chatgpt-computer-control-${userKey}`

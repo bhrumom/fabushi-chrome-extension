@@ -13,7 +13,7 @@ import {
   stopBrowserExtensionBridgeForTests,
 } from "../lib/browser-extension-bridge.js";
 import { browserExtensionPaths, NATIVE_HOST_NAME } from "../lib/browser-extension-paths.js";
-import { browserExtensionStatus, installBrowserExtension } from "../lib/browser-extension-install.js";
+import { browserExtensionStatus, CHROME_PLATFORM_NATIVE_HOST_NAME, installBrowserExtension, quarantineLegacyBrowserExtension, unregisterLegacyNativeMessaging } from "../lib/browser-extension-install.js";
 import { browserSessionCua, browserSessionUtility, listBrowserSessions } from "../lib/browser-session.js";
 
 function lineClient(path) {
@@ -52,10 +52,11 @@ async function waitFor(check, timeout = 2_000) {
   throw new Error("Timed out waiting for browser extension test event.");
 }
 
-test("browser extension install creates a stable isolated extension and allow-listed native host", async () => {
+test("browser extension install creates a stable first-class platform and two allow-listed native hosts", async () => {
   const root = await mkdtemp(join(tmpdir(), "browser-extension-install-"));
   const nativeDir = join(root, "native-manifests");
   const oldHome = process.env.COMPUTER_BROWSER_EXTENSION_HOME;
+  const oldPublishedId = process.env.FABUSHI_CHROME_EXTENSION_ID;
   process.env.COMPUTER_BROWSER_EXTENSION_HOME = join(root, "bridge");
   try {
     const privateHost = join(root, "private-runtime", "scripts", "browser-extension-host.mjs");
@@ -70,16 +71,37 @@ test("browser extension install creates a stable isolated extension and allow-li
     assert.ok(manifest.permissions.includes("debugger"));
     assert.ok(manifest.permissions.includes("tabGroups"));
     assert.ok(manifest.permissions.includes("webNavigation"));
-    assert.ok(!manifest.host_permissions);
-    const native = JSON.parse(await readFile(join(nativeDir, `${NATIVE_HOST_NAME}.json`), "utf8"));
-    assert.deepEqual(native.allowed_origins, [`chrome-extension://${first.extensionId}/`]);
-    assert.equal(native.type, "stdio");
+    assert.ok(manifest.permissions.includes("scripting"));
+    assert.ok(manifest.permissions.includes("userScripts"));
+    assert.deepEqual(manifest.host_permissions, ["<all_urls>"]);
+    assert.equal(manifest.content_scripts?.[0]?.js?.[0], "userscript-content.js");
+    const browserNative = JSON.parse(await readFile(join(nativeDir, `${NATIVE_HOST_NAME}.json`), "utf8"));
+    const platformNative = JSON.parse(await readFile(join(nativeDir, `${CHROME_PLATFORM_NATIVE_HOST_NAME}.json`), "utf8"));
+    assert.deepEqual(browserNative.allowed_origins, [`chrome-extension://${first.extensionId}/`]);
+    assert.deepEqual(platformNative.allowed_origins, [`chrome-extension://${first.extensionId}/`]);
+    assert.equal(browserNative.type, "stdio");
+    assert.equal(platformNative.type, "stdio");
     const launcher = await readFile(first.launcher, "utf8");
+    const platformLauncher = await readFile(first.platformLauncher, "utf8");
     assert.ok(launcher.includes(privateHost));
+    assert.match(platformLauncher, /chrome-platform-host\.mjs/);
     assert.equal(first.runtime, resolve("."));
-    assert.equal((await browserExtensionStatus()).installed, true);
+    const status = await browserExtensionStatus();
+    assert.equal(status.installed, true);
+    assert.equal(status.platform, "chrome-extension");
+    assert.equal(status.version, "0.5.0");
+    assert.equal(status.publishedExtensionId, null);
+
+    // A production install must explicitly bind the native hosts to the Web
+    // Store ID. Reusing the generated key is allowed only when that exact ID
+    // is supplied as the configured published identity.
+    process.env.FABUSHI_CHROME_EXTENSION_ID = first.extensionId;
+    const published = await installBrowserExtension({ currentPlatform: "linux", manifestDestinations: [{ browser: "test", directory: nativeDir }], runtimeInstaller });
+    assert.equal(published.publishedExtensionId, first.extensionId);
+    assert.equal((await browserExtensionStatus()).publishedExtensionId, first.extensionId);
   } finally {
     if (oldHome === undefined) delete process.env.COMPUTER_BROWSER_EXTENSION_HOME; else process.env.COMPUTER_BROWSER_EXTENSION_HOME = oldHome;
+    if (oldPublishedId === undefined) delete process.env.FABUSHI_CHROME_EXTENSION_ID; else process.env.FABUSHI_CHROME_EXTENSION_ID = oldPublishedId;
     await rm(root, { recursive: true, force: true });
   }
 });
@@ -174,6 +196,58 @@ test("private browser bridge authenticates native hosts and correlates extension
   }
 });
 
+test("legacy native-host cleanup is exact and refuses to move a current Fabushi extension", async () => {
+  const root = await mkdtemp(join(tmpdir(), "browser-extension-legacy-cleanup-"));
+  const oldHome = process.env.COMPUTER_BROWSER_EXTENSION_HOME;
+  process.env.COMPUTER_BROWSER_EXTENSION_HOME = join(root, "bridge");
+  const paths = browserExtensionPaths();
+  const nativeDir = join(root, "native");
+  try {
+    await mkdir(nativeDir, { recursive: true });
+    const legacyPath = join(nativeDir, "com.fabushi.chatgpt_computer_control.json");
+    await writeFile(legacyPath, "{}\n");
+    const cleanup = await unregisterLegacyNativeMessaging({ currentPlatform: "linux", manifestDestinations: [{ browser: "test", directory: nativeDir }] });
+    assert.deepEqual(cleanup.removed, [legacyPath]);
+    const extensionDir = paths.extension;
+    await mkdir(extensionDir, { recursive: true });
+    await writeFile(join(extensionDir, "manifest.json"), JSON.stringify({ name: "Fabushi", version: "0.5.0" }));
+    const quarantine = await quarantineLegacyBrowserExtension({ trashDirectory: join(root, "trash") });
+    assert.equal(quarantine.moved, false);
+    assert.equal(quarantine.reason, "legacy manifest not present");
+  } finally {
+    if (oldHome === undefined) delete process.env.COMPUTER_BROWSER_EXTENSION_HOME; else process.env.COMPUTER_BROWSER_EXTENSION_HOME = oldHome;
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("a legacy Bridge install rotates its extension identity without overwriting the legacy source", async () => {
+  const root = await mkdtemp(join(tmpdir(), "browser-extension-legacy-rotation-"));
+  const oldHome = process.env.COMPUTER_BROWSER_EXTENSION_HOME;
+  const oldPublishedId = process.env.FABUSHI_CHROME_EXTENSION_ID;
+  process.env.COMPUTER_BROWSER_EXTENSION_HOME = join(root, "bridge");
+  delete process.env.FABUSHI_CHROME_EXTENSION_ID;
+  const paths = browserExtensionPaths();
+  try {
+    const runtimeInstaller = async () => ({ root: resolve(".") });
+    const first = await installBrowserExtension({ currentPlatform: "linux", manifestDestinations: [{ browser: "test", directory: join(root, "native") }], runtimeInstaller });
+    const previous = JSON.parse(await readFile(paths.metadata, "utf8"));
+    await writeFile(paths.metadata, `${JSON.stringify({ publicKey: previous.publicKey, extensionId: previous.extensionId })}\n`, { mode: 0o600 });
+    await mkdir(paths.legacyExtension, { recursive: true });
+    await writeFile(join(paths.legacyExtension, "manifest.json"), JSON.stringify({ name: "ChatGPT Computer Control Bridge" }));
+    const migrated = await installBrowserExtension({ currentPlatform: "linux", manifestDestinations: [{ browser: "test", directory: join(root, "native-2") }], runtimeInstaller });
+    assert.notEqual(migrated.extensionId, first.extensionId);
+    const metadata = JSON.parse(await readFile(paths.metadata, "utf8"));
+    assert.equal(metadata.legacyExtensionId, first.extensionId);
+    assert.equal(JSON.parse(await readFile(join(paths.legacyExtension, "manifest.json"), "utf8")).name, "ChatGPT Computer Control Bridge");
+    const quarantine = await quarantineLegacyBrowserExtension({ trashDirectory: join(root, "trash") });
+    assert.equal(quarantine.moved, true);
+  } finally {
+    if (oldHome === undefined) delete process.env.COMPUTER_BROWSER_EXTENSION_HOME; else process.env.COMPUTER_BROWSER_EXTENSION_HOME = oldHome;
+    if (oldPublishedId === undefined) delete process.env.FABUSHI_CHROME_EXTENSION_ID; else process.env.FABUSHI_CHROME_EXTENSION_ID = oldPublishedId;
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("native messaging host reconnects and re-registers after the local bridge restarts", async () => {
   const root = await mkdtemp(join(tmpdir(), "browser-extension-reconnect-"));
   const oldHome = process.env.COMPUTER_BROWSER_EXTENSION_HOME;
@@ -228,4 +302,28 @@ test("packaged extension contains no remotely hosted executable code", async () 
   assert.match(background, /onCreatedNavigationTarget/);
   assert.match(background, /ensureAutomationGroup/);
   assert.match(background, /HEARTBEAT_ALARM/);
+});
+
+test("first-class browser control preserves the legacy Bridge command, action, and event contract", async () => {
+  const legacy = await readFile(resolve("extension/background.js"), "utf8");
+  const current = await readFile(resolve("chrome-platform/extension/browser-control.js"), "utf8");
+  const commands = ["list_tabs", "claim_tab", "cdp", "cdp_auto_attach_frame", "downloads", "tab_action", "create_tab", "cleanup_tabs", "detach"];
+  const actions = ["activate_tab", "close_tab", "navigate", "reload", "back", "forward", "retain_tab", "release_tab"];
+  for (const command of commands) {
+    assert.match(legacy, new RegExp(`\\"${command}\\"`));
+    assert.match(current, new RegExp(`\\"${command}\\"`));
+  }
+  for (const action of actions) {
+    assert.match(legacy, new RegExp(`\\"${action}\\"`));
+    assert.match(current, new RegExp(`\\"${action}\\"`));
+  }
+  for (const event of ["Target.attachedToTarget", "Target.detachedFromTarget", "cdp_event"]) {
+    assert.ok(legacy.includes(event));
+    assert.ok(current.includes(event));
+  }
+  assert.match(current, /The tab changed before Fabushi could claim it/);
+  assert.match(current, /generation changed before Fabushi could claim/);
+  assert.match(current, /Only ordinary http\/https tabs can be controlled/);
+  const manifest = JSON.parse(await readFile(resolve("chrome-platform/extension/manifest.json"), "utf8"));
+  for (const permission of ["debugger", "nativeMessaging", "downloads", "tabs", "tabGroups", "webNavigation", "scripting", "userScripts", "storage", "alarms"]) assert.ok(manifest.permissions.includes(permission), permission);
 });

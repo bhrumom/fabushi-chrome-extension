@@ -1,0 +1,88 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="color-scheme" content="light" />
+  <title>Fabushi</title>
+  <link rel="stylesheet" href="app.css" />
+  <link rel="stylesheet" href="userscript.css" />
+  <style>[hidden]{display:none!important}</style>
+</head>
+<body>
+  <div class="shell">
+    <aside class="sidebar">
+      <div class="brand"><div class="brand-mark">F</div><div><strong>Fabushi</strong><span>Chrome</span></div></div>
+      <button class="new-chat" id="new-chat" type="button">＋ 新对话</button>
+      <nav aria-label="Fabushi">
+        <button type="button" data-view="chats" aria-current="page">聊天</button>
+        <button type="button" data-view="miniapps">小程序</button>
+        <button type="button" data-view="marketplace">Marketplace</button>
+        <button type="button" data-view="browser">浏览器</button>
+        <button type="button" data-view="settings">设置</button>
+      </nav>
+      <div class="desktop-state" id="desktop-state"><span class="dot"></span><div><strong>插件独立运行中</strong><span>浏览器控制和油猴脚本已由 Fabushi 接管</span></div></div>
+      <button class="account" id="account-button" type="button"><span class="avatar" id="account-avatar">F</span><span><strong id="account-name">Fabushi</strong><small id="account-detail">独立模式 · 双桥接运行器</small></span></button>
+    </aside>
+
+    <main class="workspace">
+      <header>
+        <div><span class="eyebrow">Fabushi · Chrome</span><h1 id="view-title">聊天</h1></div>
+        <div class="header-actions">
+          <label class="search"><span>⌕</span><input id="search" type="search" placeholder="搜索 Fabushi" autocomplete="off" /></label>
+          <button id="open-desktop-settings" class="icon-button" type="button" title="在桌面端打开设置">⚙</button>
+        </div>
+      </header>
+      <nav class="compact-nav" aria-label="Fabushi 快速导航">
+        <button type="button" data-view="chats" aria-current="page">聊天</button>
+        <button type="button" data-view="miniapps">小程序</button>
+        <button type="button" data-view="marketplace">Marketplace</button>
+        <button type="button" data-view="browser">浏览器</button>
+        <button type="button" data-view="settings">设置</button>
+      </nav>
+
+      <section id="banner" class="banner" hidden></section>
+      <section id="loading" class="loading"><span class="spinner"></span><div><strong>正在启动 Fabushi 插件</strong><p>正在读取 Chrome 本地脚本和 Marketplace；桌面端是可选增强。</p></div></section>
+
+      <section id="chats-view" class="view" hidden>
+        <div class="split">
+          <div class="list-panel"><div class="panel-heading"><strong>最近聊天</strong><span id="chat-count">0</span></div><div id="chat-list" class="stack"></div></div>
+          <div class="conversation-panel">
+            <div id="conversation-empty" class="empty"><div class="orb">F</div><h2>Fabushi Chrome 插件</h2><p>浏览器控制、油猴脚本和任务工作台由同一个 Fabushi 扩展承载；聊天账户同步属于可选桌面增强。</p></div>
+            <div id="conversation" hidden><div id="conversation-title" class="conversation-title"></div><div id="messages" class="messages"></div><form id="composer"><textarea id="composer-input" rows="2" placeholder="给 Fabushi 发消息…"></textarea><button type="submit">发送</button></form></div>
+          </div>
+        </div>
+      </section>
+
+      <section id="miniapps-view" class="view" hidden>
+        <div class="section-intro"><div><h2>脚本与小程序</h2><p>Chrome 油猴脚本由 Fabushi 本地安装和运行，不依赖第二个扩展。</p></div><label class="import-button">导入油猴脚本<input id="import-userscript" type="file" accept=".user.js,.js,text/javascript" hidden /></label></div>
+        <div id="miniapp-list" class="cards"></div>
+        <div id="miniapp-empty" class="empty compact"><h3>还没有已安装的小程序</h3><p>从 Marketplace 安装后会出现在这里。</p></div>
+        <div class="section-intro userscript-heading"><div><h2>油猴脚本</h2><p>安装的脚本只在自己的匹配网页运行，可随时停用或卸载。</p></div></div>
+        <div id="userscript-list" class="cards"></div>
+        <div id="userscript-empty" class="empty compact"><h3>还没有已安装的油猴脚本</h3><p>在 Marketplace 点击“安装油猴脚本”，或导入本地 .user.js 文件。</p></div>
+      </section>
+
+      <section id="marketplace-view" class="view" hidden>
+        <div class="section-intro"><h2>Marketplace</h2><p>脚本、浏览器控制桥和桌面扩展内容统一从 Fabushi Marketplace 管理。</p></div>
+        <div id="marketplace-list" class="cards"></div>
+      </section>
+
+      <section id="browser-view" class="view" hidden>
+        <div class="section-intro"><h2>当前 Chrome</h2><p>桌面端可以通过本插件直接操作你正在使用的 Chrome 标签页，不再需要另开 CDP 浏览器。</p></div>
+        <div class="bridge-card"><div><strong id="browser-bridge-title">浏览器桥接</strong><p id="browser-bridge-detail">正在检查…</p></div><button id="refresh-browser" type="button">刷新</button></div>
+        <div id="tab-list" class="tab-list"></div>
+      </section>
+
+      <section id="settings-view" class="view" hidden>
+        <div class="settings-grid">
+          <article><span class="setting-icon">◎</span><div><h3>独立脚本运行器</h3><p>脚本安装、更新、启停和 ChatGPT 页面执行全部由 Fabushi 本地完成；桌面账户不是前置条件。</p></div><span id="settings-auth" class="pill">可用</span></article>
+          <article><span class="setting-icon">⇄</span><div><h3>Chrome 桥接</h3><p>把当前浏览器标签页作为 Fabushi Computer Control 的 extension session 暴露给桌面端。</p></div><span id="settings-browser" class="pill">检查中</span></article>
+          <article><span class="setting-icon">⚙</span><div><h3>可选桌面增强</h3><p>连接后可共享账户、聊天和计算机控制；未安装或未启动桌面端不影响 Chrome 脚本。</p></div><button id="settings-open-desktop" type="button">打开桌面设置</button></article>
+        </div>
+      </section>
+    </main>
+  </div>
+  <script src="app.js" type="module"></script>
+</body>
+</html>
