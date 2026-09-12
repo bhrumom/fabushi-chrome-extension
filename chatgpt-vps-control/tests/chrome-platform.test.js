@@ -71,6 +71,9 @@ test("desktop browser control uses the current Chrome through the renamed native
   assert.doesNotMatch(browser, /com\.fabushi\.chatgpt_computer_control/);
   assert.match(browser, /chrome\.tabs\.query/);
   assert.match(browser, /chrome\.debugger\.attach/);
+  assert.match(browser, /sendCdpCommand/);
+  assert.match(browser, /Page\.bringToFront/);
+  assert.match(browser, /fromSurface: false/);
   assert.match(browser, /claim_tab/);
   assert.match(browser, /cdp_auto_attach_frame/);
   assert.match(browser, /generation changed before Fabushi could claim/);

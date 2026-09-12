@@ -183,6 +183,25 @@ async function ensureDebugger(tabId) {
   });
 }
 
+function isScreenshotSurfaceError(error) {
+  const message = error instanceof Error ? error.message : String(error);
+  return /(?:unable to capture screenshot|captureScreenshot.*(?:timed out|timeout)|timed out.*captureScreenshot)/i.test(message);
+}
+
+async function sendCdpCommand(target, method, params = {}) {
+  try {
+    return await chrome.debugger.sendCommand(target, method, params);
+  } catch (error) {
+    // Chrome can transiently have no composited surface for a background tab.
+    // Match the desktop CUA fallback: bring the target forward and retry with
+    // the non-surface capture path, while preserving all other CDP errors.
+    if (method !== "Page.captureScreenshot" || params.fromSurface === false || !isScreenshotSurfaceError(error)) throw error;
+    await chrome.debugger.sendCommand(target, "Page.bringToFront").catch(() => {});
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    return chrome.debugger.sendCommand(target, method, { ...params, fromSurface: false });
+  }
+}
+
 function childSessionKey(tabId, parentSessionId, targetId) {
   return `${tabId}:${String(parentSessionId || "")}:${String(targetId || "")}`;
 }
@@ -326,7 +345,7 @@ async function handleCommand(command, params = {}) {
     const { id } = await requireClaimed(params.targetId);
     await ensureDebugger(id);
     const target = { tabId: id, ...(params.sessionId ? { sessionId: String(params.sessionId) } : {}) };
-    return locked(id, () => chrome.debugger.sendCommand(target, String(params.method), params.params || {}));
+    return locked(id, () => sendCdpCommand(target, String(params.method), params.params || {}));
   }
   if (command === "cdp_auto_attach_frame") {
     const { id } = await requireClaimed(params.targetId);
