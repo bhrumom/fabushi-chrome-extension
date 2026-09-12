@@ -5,6 +5,7 @@ const state = {
   view: "chats",
   desktopConnected: false,
   auth: { loggedIn: false },
+  browserAccount: { loggedIn: false, connected: false },
   conversations: [],
   activeConversationId: "",
   messages: new Map(),
@@ -76,6 +77,25 @@ function setAuth(auth) {
     : state.auth.deferred ? "桌面增强已连接 · 首次授权时读取" : "独立模式 · 本地脚本运行器";
   accountAvatar.textContent = String(label).trim().slice(0, 1).toUpperCase() || "F";
   $("#settings-auth").textContent = state.auth.loggedIn ? "已登录" : "可选";
+}
+
+function setBrowserAccount(status) {
+  state.browserAccount = status && typeof status === "object" ? status : { loggedIn: false, connected: false };
+  const loggedIn = Boolean(state.browserAccount.loggedIn);
+  const connected = Boolean(state.browserAccount.connected);
+  const loggingIn = Boolean(state.browserAccount.loggingIn);
+  const label = state.browserAccount.account?.user?.nickname || state.browserAccount.account?.user?.username || state.browserAccount.account?.user?.email || "Fabushi";
+  $("#browser-account-detail").textContent = loggedIn
+    ? `${label} · ${connected ? "已连接官方 MCP" : "正在连接官方 MCP"}`
+    : (state.browserAccount.error || "登录后，官方 MCP 只会发现同一账号下的这个 Chrome。");
+  $("#browser-account-action").textContent = loggedIn ? "退出登录" : (loggingIn ? "等待登录" : "登录 Fabushi");
+  $("#settings-browser").textContent = connected ? "已直连" : (loggedIn ? "连接中" : "需登录");
+  if (loggedIn) setAuth(state.browserAccount.account);
+  else if (!state.desktopConnected) setAuth({ loggedIn: false, standalone: true });
+}
+
+async function refreshBrowserAccount() {
+  setBrowserAccount(await runtimeMessage({ type: "fabushi.account.status" }));
 }
 
 function activateView(name) {
@@ -630,7 +650,7 @@ async function connectDesktopEnhancements() {
     // older Hosts that do not expose this method keep the deferred state.
     const auth = await desktopRequest("feature.auth.status", {}, 10_000)
       .catch(() => ({ loggedIn: false, deferred: true, provider: "Fabushi" }));
-    setAuth(auth);
+    if (!state.browserAccount.loggedIn) setAuth(auth);
     await Promise.allSettled([refreshBrowser(), refreshMarketplace("")]);
   } catch (error) {
     setDesktopConnection(false, error.message);
@@ -647,7 +667,7 @@ async function initialize() {
   hideBanner();
   setDesktopConnection(false);
   setAuth({ loggedIn: false, standalone: true });
-  await Promise.allSettled([refreshUserscripts(), refreshMarketplace("")]);
+  await Promise.allSettled([refreshUserscripts(), refreshMarketplace(""), refreshBrowserAccount()]);
   loading.hidden = true;
   activateView("marketplace");
   void connectDesktopEnhancements();
@@ -657,6 +677,19 @@ for (const button of navButtons) button.addEventListener("click", () => activate
 $("#open-desktop-settings").addEventListener("click", () => void openDesktopSettings());
 $("#settings-open-desktop").addEventListener("click", () => void openDesktopSettings());
 $("#account-button").addEventListener("click", () => activateView("settings"));
+$("#browser-account-action").addEventListener("click", async () => {
+  const type = state.browserAccount.loggedIn ? "fabushi.account.logout" : "fabushi.account.login";
+  $("#browser-account-action").disabled = true;
+  try {
+    const response = await runtimeMessage({ type });
+    if (!response?.ok) throw new Error(response?.error || "Fabushi 账号操作失败。");
+    await refreshBrowserAccount();
+  } catch (error) {
+    showBanner(error.message, "error");
+  } finally {
+    $("#browser-account-action").disabled = false;
+  }
+});
 $("#refresh-browser").addEventListener("click", () => void refreshBrowser());
 $("#new-chat").addEventListener("click", () => {
   state.activeConversationId = "new";

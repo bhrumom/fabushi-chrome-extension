@@ -69,15 +69,16 @@
       </section>
 
       <section id="browser-view" class="view" hidden>
-        <div class="section-intro"><h2>当前 Chrome</h2><p>桌面端可以通过本插件直接操作你正在使用的 Chrome 标签页，不再需要另开 CDP 浏览器。</p></div>
+        <div class="section-intro"><h2>当前 Chrome</h2><p>同一 Fabushi 账号的官方 MCP 可以通过本插件操作你正在使用的 Chrome 标签页，不再需要独立 Bridge。</p></div>
         <div class="bridge-card"><div><strong id="browser-bridge-title">浏览器桥接</strong><p id="browser-bridge-detail">正在检查…</p></div><button id="refresh-browser" type="button">刷新</button></div>
         <div id="tab-list" class="tab-list"></div>
       </section>
 
       <section id="settings-view" class="view" hidden>
         <div class="settings-grid">
+          <article><span class="setting-icon">F</span><div><h3>Fabushi 账号</h3><p id="browser-account-detail">登录后，官方 MCP 只会发现同一账号下的这个 Chrome。</p></div><button id="browser-account-action" type="button">登录 Fabushi</button></article>
           <article><span class="setting-icon">◎</span><div><h3>独立脚本运行器</h3><p>脚本安装、更新、启停和 ChatGPT 页面执行全部由 Fabushi 本地完成；桌面账户不是前置条件。</p></div><span id="settings-auth" class="pill">可用</span></article>
-          <article><span class="setting-icon">⇄</span><div><h3>Chrome 桥接</h3><p>把当前浏览器标签页作为 Fabushi Computer Control 的 extension session 暴露给桌面端。</p></div><span id="settings-browser" class="pill">检查中</span></article>
+          <article><span class="setting-icon">⇄</span><div><h3>官方 MCP 浏览器直连</h3><p>完整 Bridge 命令、CDP、下载与标签页生命周期由这个插件提供。</p></div><span id="settings-browser" class="pill">检查中</span></article>
           <article><span class="setting-icon">⚙</span><div><h3>可选桌面增强</h3><p>连接后可共享账户、聊天和计算机控制；未安装或未启动桌面端不影响 Chrome 脚本。</p></div><button id="settings-open-desktop" type="button">打开桌面设置</button></article>
         </div>
       </section>

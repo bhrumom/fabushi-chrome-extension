@@ -76,6 +76,7 @@ async function state() {
 
 async function saveState(current) {
   await chrome.storage.session.set({
+    [STORAGE.generation]: current.generation,
     [STORAGE.claimed]: [...current.claimed],
     [STORAGE.automation]: [...current.automation],
     [STORAGE.retained]: [...current.retained],
@@ -114,6 +115,7 @@ async function visibleTabs() {
 }
 
 function post(message) {
+  try { globalThis.__fabushiBrowserEvent?.(message); } catch {}
   try { nativePort?.postMessage(message); return Boolean(nativePort); }
   catch (error) { nativeError = error?.message || String(error); return false; }
 }
@@ -418,6 +420,20 @@ async function handleCommand(command, params = {}) {
   }
   throw new Error(`Unsupported Fabushi browser command: ${command}`);
 }
+
+async function revokeClaims() {
+  const current = await state();
+  for (const tabId of attachedTabs) await chrome.debugger.detach({ tabId }).catch(() => {});
+  attachedTabs.clear();
+  childSessions.clear();
+  current.claimed.clear();
+  current.generation = randomId();
+  await saveState(current);
+  await announce();
+}
+
+globalThis.__fabushiBrowserCommand = handleCommand;
+globalThis.__fabushiBrowserRevokeClaims = revokeClaims;
 
 async function handleRequest(message) {
   try {

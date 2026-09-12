@@ -89,7 +89,7 @@ test("browser extension install creates a stable first-class platform and two al
     const status = await browserExtensionStatus();
     assert.equal(status.installed, true);
     assert.equal(status.platform, "chrome-extension");
-    assert.equal(status.version, "0.5.0");
+    assert.equal(status.version, "0.6.0");
     assert.equal(status.publishedExtensionId, null);
 
     // A production install must explicitly bind the native hosts to the Web

@@ -19,7 +19,7 @@ test("Fabushi Chrome platform includes the product shell, browser bridge, and in
   const manifest = JSON.parse(await source("manifest.json"));
   assert.equal(manifest.manifest_version, 3);
   assert.equal(manifest.name, "Fabushi");
-  assert.equal(manifest.version, "0.5.0");
+  assert.equal(manifest.version, "0.6.0");
   assert.equal(manifest.action.default_popup, "app.html");
   assert.equal(manifest.background.service_worker, "service-worker.js");
   for (const permission of ["debugger", "nativeMessaging", "downloads", "tabs", "tabGroups", "webNavigation", "scripting", "userScripts", "storage", "alarms"]) assert.ok(manifest.permissions.includes(permission), permission);
@@ -28,6 +28,7 @@ test("Fabushi Chrome platform includes the product shell, browser bridge, and in
   const worker = await source("service-worker.js");
   assert.match(worker, /platform-bridge\.js/);
   assert.match(worker, /browser-control\.js/);
+  assert.match(worker, /account-browser-agent\.js/);
   assert.match(worker, /userscript-runner\.js/);
   assert.match(worker, /platform-bridge\.js/);
   await source("userscript-core.js");
@@ -36,6 +37,18 @@ test("Fabushi Chrome platform includes the product shell, browser bridge, and in
   await source("userscript.css");
   await source("userscript/chatgpt-auto-confirm.user.js");
   await source("marketplace/chatgpt-task-queue.user.js");
+});
+
+test("Chrome account agent uses Fabushi login and the account-scoped official MCP gateway", async () => {
+  const agent = await source("account-browser-agent.js");
+  assert.match(agent, /\/api\/auth\/browser\/start/);
+  assert.match(agent, /\/api\/auth\/browser\/attempts/);
+  assert.match(agent, /wss:\/\/fabushi-mcp\.ombhrum\.com\/browser-agent/);
+  assert.match(agent, /chrome\.storage\.session/);
+  assert.match(agent, /__fabushiBrowserCommand/);
+  assert.match(agent, /__fabushiBrowserRevokeClaims/);
+  assert.match(agent, /browser_events/);
+  assert.doesNotMatch(agent, /refreshToken|refresh_token/);
 });
 
 test("Chrome UI delegates account/product work to desktop Host and exposes safe userscript controls", async () => {
