@@ -74,6 +74,7 @@ test("desktop browser control uses the current Chrome through the renamed native
   assert.match(browser, /sendCdpCommand/);
   assert.match(browser, /Page\.bringToFront/);
   assert.match(browser, /fromSurface: false/);
+  assert.match(browser, /only screenshots from surface are allowed/);
   assert.match(browser, /claim_tab/);
   assert.match(browser, /cdp_auto_attach_frame/);
   assert.match(browser, /generation changed before Fabushi could claim/);

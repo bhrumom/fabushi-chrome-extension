@@ -185,20 +185,26 @@ async function ensureDebugger(tabId) {
 
 function isScreenshotSurfaceError(error) {
   const message = error instanceof Error ? error.message : String(error);
-  return /(?:unable to capture screenshot|captureScreenshot.*(?:timed out|timeout)|timed out.*captureScreenshot)/i.test(message);
+  return /(?:unable to capture screenshot|only screenshots from surface are allowed|screenshots? from surface|captureScreenshot.*(?:timed out|timeout)|timed out.*captureScreenshot)/i.test(message);
 }
 
 async function sendCdpCommand(target, method, params = {}) {
   try {
     return await chrome.debugger.sendCommand(target, method, params);
   } catch (error) {
-    // Chrome can transiently have no composited surface for a background tab.
-    // Match the desktop CUA fallback: bring the target forward and retry with
-    // the non-surface capture path, while preserving all other CDP errors.
+    // Chrome can transiently have no composited surface for a background tab,
+    // or reject a surface-mode capture while the target is being activated.
+    // Bring the target forward and retry the requested mode first; if Chrome
+    // still reports a surface restriction, use the non-surface capture path.
     if (method !== "Page.captureScreenshot" || params.fromSurface === false || !isScreenshotSurfaceError(error)) throw error;
     await chrome.debugger.sendCommand(target, "Page.bringToFront").catch(() => {});
     await new Promise((resolve) => setTimeout(resolve, 100));
-    return chrome.debugger.sendCommand(target, method, { ...params, fromSurface: false });
+    try {
+      return await chrome.debugger.sendCommand(target, method, params);
+    } catch (retryError) {
+      if (!isScreenshotSurfaceError(retryError)) throw retryError;
+      return chrome.debugger.sendCommand(target, method, { ...params, fromSurface: false });
+    }
   }
 }
 
