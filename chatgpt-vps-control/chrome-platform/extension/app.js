@@ -1,6 +1,28 @@
+import {
+  compareMarketplaceVersions as compareVersions,
+  marketplaceInstallAction,
+  marketplaceInstalledVersion,
+  marketplaceInstallContract,
+  marketplaceItemInstallable,
+  marketplaceItemKind,
+  marketplaceItemVersion,
+  marketplaceReleaseManifest,
+  marketplaceUserscriptArtifact,
+} from "./marketplace-install.js";
+
 const views = ["chats", "miniapps", "marketplace", "browser", "settings"];
 const labels = { chats: "聊天", miniapps: "小程序", marketplace: "Marketplace", browser: "浏览器", settings: "设置" };
 const BUNDLED_USERSCRIPT_PATH = "userscript/chatgpt-auto-confirm.user.js";
+const MARKETPLACE_API_ROOT = "https://api.ombhrum.com";
+const MARKETPLACE_USERSCRIPT_REPOSITORY = "https://github.com/bhrumom/fabushi-chatgpt-auto-confirm-userscript";
+const MARKETPLACE_USERSCRIPT_COMMIT = "4e6340e380f5c6c9b22b4a5b4352ad08e8d67ba2";
+const MARKETPLACE_USERSCRIPT_SHA256 = "7529a90211ebd969044313ca38fd1d7fca1fba702604794eafe749884a59695a";
+const MARKETPLACE_USERSCRIPT_SIZE = 133694;
+const MARKETPLACE_TASK_QUEUE_REPOSITORY = "https://github.com/bhrumom/fabushi";
+const MARKETPLACE_TASK_QUEUE_COMMIT = "a9d0b883c68dd45c14f9966ab79656bcf43c4d0e";
+const MARKETPLACE_TASK_QUEUE_SHA256 = "38bec5437d9a2ad3d04c4e138b2cf681fb788932b133696744ffdf05e4d45b38";
+const MARKETPLACE_TASK_QUEUE_SIZE = 13314;
+const MAX_REMOTE_USERSCRIPT_BYTES = 2 * 1024 * 1024;
 const state = {
   view: "chats",
   desktopConnected: false,
@@ -62,8 +84,8 @@ function setDesktopConnection(connected, error = "") {
   desktopState.classList.toggle("error", false);
   desktopState.querySelector("strong").textContent = connected ? "桌面增强已连接" : "插件独立运行中";
   desktopState.querySelector("span:last-child").textContent = connected
-    ? "可选共享 Fabushi 账户和 Host"
-    : "油猴脚本与更新无需桌面端";
+    ? "可选共享 Fabushi 账户；GitHub 包由 Host 校验安装"
+    : "油猴脚本可独立运行；GitHub 小程序包需要 Host 安装";
   desktopState.title = connected ? "桌面端为可选增强能力" : (error || "Chrome 本地运行器已就绪");
 }
 
@@ -218,21 +240,112 @@ const BUILTIN_MARKETPLACE_ITEM = {
   pluginId: "chatgpt-auto-confirm",
   displayName: "ChatGPT 自动确认",
   description: "独立运行于 ChatGPT 网页的自动确认、对话和可恢复任务队列控制台，不依赖 Fabushi 桌面端。",
-  // Keep a usable local fallback while the remote catalogue catches up. The
-  // actual value is refreshed from the bundled script below whenever the
-  // Marketplace opens.
-  latestVersion: "2.9.2",
+  // Keep a signed local compatibility copy while the remote catalogue is
+  // unavailable. The install/update path below uses the pinned GitHub release.
+  latestVersion: "2.9.11",
   bundledFallback: true,
   platforms: ["desktop", "cli", "chrome-extension"],
   matches: ["https://chatgpt.com/*", "https://chat.openai.com/*"],
   releaseStatus: "approved",
   installMode: "package",
   source: {
+    provider: "github",
+    repository: MARKETPLACE_USERSCRIPT_REPOSITORY,
+    sourceRef: MARKETPLACE_USERSCRIPT_COMMIT,
+    releaseUrl: `${MARKETPLACE_USERSCRIPT_REPOSITORY}/releases/tag/v2.9.11`,
     surfaces: [{ id: "userscript", kind: "userscript", title: "ChatGPT 网页油猴脚本", entry: "userscript/chatgpt-auto-confirm.user.js", platforms: ["chrome-extension"] }],
     commands: [],
   },
   surfaces: [{ id: "userscript", kind: "userscript", title: "ChatGPT 网页油猴脚本", entry: "userscript/chatgpt-auto-confirm.user.js", platforms: ["chrome-extension"] }],
   commands: [],
+  permissions: ["读取 ChatGPT 页面状态", "显示任务队列", "仅在匹配页面运行"],
+  install: {
+    protocol: "fabushi.marketplace.install.v1",
+    strategy: "github-immutable",
+    pluginId: "chatgpt-auto-confirm",
+    version: "2.9.11",
+    source: {
+      provider: "github",
+      repository: MARKETPLACE_USERSCRIPT_REPOSITORY,
+      sourceRef: MARKETPLACE_USERSCRIPT_COMMIT,
+      releaseUrl: `${MARKETPLACE_USERSCRIPT_REPOSITORY}/releases/tag/v2.9.11`,
+      marketplaceHostsPackage: false,
+    },
+    artifacts: [{
+      id: "chatgpt-auto-confirm-userscript",
+      runtime: "userscript",
+      platforms: ["chrome-extension"],
+      source: {
+        type: "https",
+        url: `https://raw.githubusercontent.com/bhrumom/fabushi-chatgpt-auto-confirm-userscript/${MARKETPLACE_USERSCRIPT_COMMIT}/chatgpt-auto-confirm.user.js`,
+      },
+      sha256: MARKETPLACE_USERSCRIPT_SHA256,
+      size: MARKETPLACE_USERSCRIPT_SIZE,
+      format: "user-js",
+      entry: "chatgpt-auto-confirm.user.js",
+    }],
+    update: {
+      check: "marketplace-release",
+      comparison: "version-then-artifact-sha256",
+      allowDowngrade: false,
+      rollback: "previous-active",
+    },
+    permissions: ["读取 ChatGPT 页面状态", "显示任务队列", "仅在匹配页面运行"],
+  },
+  releaseManifest: {
+    schemaVersion: 1,
+    protocol: "mahayana.external-release.v1",
+    pluginId: "chatgpt-auto-confirm",
+    version: "2.9.11",
+    runtimeForm: "userscript",
+    permissions: ["读取 ChatGPT 页面状态", "显示任务队列", "仅在匹配页面运行"],
+    artifacts: [{
+      id: "chatgpt-auto-confirm-userscript",
+      runtime: "userscript",
+      platforms: ["chrome-extension"],
+      source: {
+        type: "https",
+        url: `https://raw.githubusercontent.com/bhrumom/fabushi-chatgpt-auto-confirm-userscript/${MARKETPLACE_USERSCRIPT_COMMIT}/chatgpt-auto-confirm.user.js`,
+      },
+      sha256: MARKETPLACE_USERSCRIPT_SHA256,
+      size: MARKETPLACE_USERSCRIPT_SIZE,
+      format: "user-js",
+      entry: "chatgpt-auto-confirm.user.js",
+    }],
+    install: {
+      protocol: "fabushi.marketplace.install.v1",
+      strategy: "github-immutable",
+      pluginId: "chatgpt-auto-confirm",
+      version: "2.9.11",
+      source: {
+        provider: "github",
+        repository: MARKETPLACE_USERSCRIPT_REPOSITORY,
+        sourceRef: MARKETPLACE_USERSCRIPT_COMMIT,
+        releaseUrl: `${MARKETPLACE_USERSCRIPT_REPOSITORY}/releases/tag/v2.9.11`,
+        marketplaceHostsPackage: false,
+      },
+      artifacts: [{
+        id: "chatgpt-auto-confirm-userscript",
+        runtime: "userscript",
+        platforms: ["chrome-extension"],
+        source: {
+          type: "https",
+          url: `https://raw.githubusercontent.com/bhrumom/fabushi-chatgpt-auto-confirm-userscript/${MARKETPLACE_USERSCRIPT_COMMIT}/chatgpt-auto-confirm.user.js`,
+        },
+        sha256: MARKETPLACE_USERSCRIPT_SHA256,
+        size: MARKETPLACE_USERSCRIPT_SIZE,
+        format: "user-js",
+        entry: "chatgpt-auto-confirm.user.js",
+      }],
+      update: {
+        check: "marketplace-release",
+        comparison: "version-then-artifact-sha256",
+        allowDowngrade: false,
+        rollback: "previous-active",
+      },
+      permissions: ["读取 ChatGPT 页面状态", "显示任务队列", "仅在匹配页面运行"],
+    },
+  },
 };
 
 const BUILTIN_TASK_QUEUE_ITEM = {
@@ -246,12 +359,50 @@ const BUILTIN_TASK_QUEUE_ITEM = {
   releaseStatus: "approved",
   installMode: "package",
   source: {
+    provider: "github",
+    repository: MARKETPLACE_TASK_QUEUE_REPOSITORY,
+    sourceRef: MARKETPLACE_TASK_QUEUE_COMMIT,
+    releaseUrl: `${MARKETPLACE_TASK_QUEUE_REPOSITORY}/tree/${MARKETPLACE_TASK_QUEUE_COMMIT}/chatgpt-vps-control/chrome-platform/extension/marketplace`,
     surfaces: [{ id: "userscript", kind: "userscript", title: "ChatGPT Task Queue", entry: "marketplace/chatgpt-task-queue.user.js", platforms: ["chrome-extension"] }],
     commands: [],
   },
   surfaces: [{ id: "userscript", kind: "userscript", title: "ChatGPT Task Queue", entry: "marketplace/chatgpt-task-queue.user.js", platforms: ["chrome-extension"] }],
   commands: [],
   sourcePath: "marketplace/chatgpt-task-queue.user.js",
+  permissions: ["读取 ChatGPT 页面状态", "显示任务队列", "仅在匹配页面运行"],
+  install: {
+    protocol: "fabushi.marketplace.install.v1",
+    strategy: "github-immutable",
+    pluginId: "userscript-chatgpt-task-queue",
+    version: "1.0.0",
+    source: {
+      provider: "github",
+      repository: MARKETPLACE_TASK_QUEUE_REPOSITORY,
+      sourceRef: MARKETPLACE_TASK_QUEUE_COMMIT,
+      releaseUrl: `${MARKETPLACE_TASK_QUEUE_REPOSITORY}/tree/${MARKETPLACE_TASK_QUEUE_COMMIT}/chatgpt-vps-control/chrome-platform/extension/marketplace`,
+      marketplaceHostsPackage: false,
+    },
+    artifacts: [{
+      id: "chatgpt-task-queue-userscript",
+      runtime: "userscript",
+      platforms: ["chrome-extension"],
+      source: {
+        type: "https",
+        url: `https://raw.githubusercontent.com/bhrumom/fabushi/${MARKETPLACE_TASK_QUEUE_COMMIT}/chatgpt-vps-control/chrome-platform/extension/marketplace/chatgpt-task-queue.user.js`,
+      },
+      sha256: MARKETPLACE_TASK_QUEUE_SHA256,
+      size: MARKETPLACE_TASK_QUEUE_SIZE,
+      format: "user-js",
+      entry: "chatgpt-task-queue.user.js",
+    }],
+    update: {
+      check: "marketplace-release",
+      comparison: "version-then-artifact-sha256",
+      allowDowngrade: false,
+      rollback: "previous-active",
+    },
+    permissions: ["读取 ChatGPT 页面状态", "显示任务队列", "仅在匹配页面运行"],
+  },
 };
 
 const BUILTIN_MARKETPLACE_ITEMS = [BUILTIN_MARKETPLACE_ITEM, BUILTIN_TASK_QUEUE_ITEM];
@@ -261,33 +412,7 @@ function itemPluginId(item) {
 }
 
 function itemVersion(item) {
-  return String(item?.latestVersion || item?.version || item?.releaseManifest?.version || "").trim();
-}
-
-function compareVersions(left, right) {
-  const a = String(left || "").trim().replace(/^v/i, "");
-  const b = String(right || "").trim().replace(/^v/i, "");
-  if (!a && !b) return 0;
-  if (!a) return -1;
-  if (!b) return 1;
-  const tokenize = (value) => value.split(/[.+-]/).flatMap((part) => {
-    const numbers = part.match(/\d+/g);
-    return numbers ? numbers.map((number) => Number(number)) : [0];
-  });
-  const aParts = tokenize(a);
-  const bParts = tokenize(b);
-  const length = Math.max(aParts.length, bParts.length);
-  for (let index = 0; index < length; index += 1) {
-    const aPart = aParts[index] || 0;
-    const bPart = bParts[index] || 0;
-    if (aPart !== bPart) return aPart > bPart ? 1 : -1;
-  }
-  // A stable release should win over a prerelease with the same numeric
-  // components (for example, 2.9.2 over 2.9.2-beta).
-  const aPrerelease = /-/.test(a);
-  const bPrerelease = /-/.test(b);
-  if (aPrerelease !== bPrerelease) return aPrerelease ? -1 : 1;
-  return 0;
+  return marketplaceItemVersion(item);
 }
 
 function itemSurfaces(item) {
@@ -308,13 +433,6 @@ function userscriptInstalled(pluginId) {
   return state.userscripts.find((script) => script.sourcePluginId === pluginId);
 }
 
-function userscriptUpdateAvailable(item, installed) {
-  if (!installed) return false;
-  const available = itemVersion(item);
-  const current = String(item?.bundledFallback ? installed.version : (installed.sourcePluginVersion || installed.version || "")).trim();
-  return Boolean(available && (!current || compareVersions(available, current) > 0));
-}
-
 function shouldShowBundledFallback(query) {
   const normalized = String(query || "").trim().toLowerCase();
   return !normalized || ["chatgpt", "task queue", "自动确认", "任务", "油猴", "userscript", "脚本"].some((term) => normalized.includes(term));
@@ -333,12 +451,10 @@ async function loadBundledUserscript(item = BUILTIN_MARKETPLACE_ITEM) {
 }
 
 async function officialMarketplaceItem() {
-  // The script is shipped in the signed extension package. Updating it is an
-  // extension release operation, so the browser never executes JavaScript
-  // fetched from an arbitrary URL at runtime.
-  const source = await loadBundledUserscript(BUILTIN_MARKETPLACE_ITEM);
-  const version = source.match(/^\s*\/\/\s*@version\s+(.+?)\s*$/mi)?.[1]?.trim();
-  return { ...BUILTIN_MARKETPLACE_ITEM, ...(version ? { latestVersion: version } : {}) };
+  // The bundled copy is only a bootstrap/rollback compatibility asset. The
+  // Marketplace version is pinned to the separately released GitHub artifact
+  // in BUILTIN_MARKETPLACE_ITEM and must not be inferred from this copy.
+  return BUILTIN_MARKETPLACE_ITEM;
 }
 
 async function bundledMarketplaceItems() {
@@ -346,8 +462,96 @@ async function bundledMarketplaceItems() {
   return [official, ...BUILTIN_MARKETPLACE_ITEMS.slice(1)];
 }
 
-async function loadOfficialUserscript(item) {
-  return loadBundledUserscript(item);
+async function fetchPublicMarketplace(query = "") {
+  const url = new URL("/v1/marketplace/plugins", MARKETPLACE_API_ROOT);
+  url.searchParams.set("platform", "chrome-extension");
+  if (query.trim()) url.searchParams.set("q", query.trim());
+  const response = await fetch(url, { headers: { Accept: "application/json" }, cache: "no-store" });
+  if (!response.ok) throw new Error(`Marketplace 读取失败（${response.status}）。`);
+  return marketplaceItems(await response.json());
+}
+
+function isGithubArtifactUrl(value) {
+  try {
+    const url = new URL(String(value || "").trim());
+    return url.protocol === "https:"
+      && ["github.com", "raw.githubusercontent.com"].includes(url.hostname.toLowerCase())
+      && !url.username
+      && !url.password
+      && !url.port
+      && !url.search
+      && !url.hash;
+  } catch {
+    return false;
+  }
+}
+
+async function sha256Hex(bytes) {
+  const digest = await crypto.subtle.digest("SHA-256", bytes);
+  return [...new Uint8Array(digest)].map((value) => value.toString(16).padStart(2, "0")).join("");
+}
+
+async function fetchVerifiedUserscript(item) {
+  const contract = marketplaceInstallContract(item);
+  const source = contract?.source;
+  const artifact = marketplaceUserscriptArtifact(item);
+  const repository = String(source?.repository || "").trim();
+  const sourceRef = String(source?.sourceRef || "").trim();
+  const artifactUrl = String(artifact?.source?.url || "").trim();
+  const expectedSha256 = String(artifact?.sha256 || artifact?.artifactSha256 || "").trim().toLowerCase();
+  const expectedSize = Number(artifact?.size ?? artifact?.sizeBytes);
+  let repositoryUrl;
+  try {
+    repositoryUrl = new URL(repository);
+  } catch {
+    repositoryUrl = null;
+  }
+  if (contract?.protocol !== "fabushi.marketplace.install.v1"
+    || contract.strategy !== "github-immutable"
+    || contract.pluginId !== marketplaceItemId(item)
+    || contract.version !== marketplaceItemVersion(item)
+    || source?.marketplaceHostsPackage !== false
+    || !repositoryUrl
+    || repositoryUrl.protocol !== "https:"
+    || repositoryUrl.hostname.toLowerCase() !== "github.com"
+    || repositoryUrl.pathname.split("/").filter(Boolean).length !== 2
+    || repositoryUrl.username
+    || repositoryUrl.password
+    || repositoryUrl.port
+    || repositoryUrl.search
+    || repositoryUrl.hash
+    || !/^[a-f0-9]{40}$/i.test(sourceRef)
+    || !isGithubArtifactUrl(artifactUrl)
+    || !/^[a-f0-9]{64}$/.test(expectedSha256)
+    || !Number.isSafeInteger(expectedSize)
+    || expectedSize <= 0
+    || expectedSize > MAX_REMOTE_USERSCRIPT_BYTES
+    || contract.update?.allowDowngrade !== false) {
+    throw new Error("市场用户脚本不是固定到公开 GitHub commit 的可验证 artifact。");
+  }
+  const repositoryParts = repositoryUrl.pathname.split("/").filter(Boolean);
+  const artifactParts = new URL(artifactUrl).pathname.split("/").filter(Boolean);
+  if (artifactParts.length < 4
+    || artifactParts[0] !== repositoryParts[0]
+    || artifactParts[1] !== repositoryParts[1]
+    || artifactParts[2] !== sourceRef) {
+    throw new Error("GitHub 用户脚本 URL 没有固定到合同声明的仓库 commit。");
+  }
+  const response = await fetch(artifactUrl, {
+    headers: { Accept: "text/javascript, text/plain" },
+    cache: "no-store",
+    redirect: "error",
+  });
+  if (!response.ok) throw new Error(`GitHub 用户脚本读取失败（${response.status}）。`);
+  const bytes = await response.arrayBuffer();
+  if (bytes.byteLength !== expectedSize) throw new Error("GitHub 用户脚本大小与市场清单不一致。");
+  const actualSha256 = await sha256Hex(bytes);
+  if (actualSha256 !== expectedSha256) throw new Error("GitHub 用户脚本 SHA-256 与市场清单不一致。");
+  const script = new TextDecoder().decode(bytes);
+  if (!script.includes("// ==UserScript==") || !script.includes("// ==/UserScript==")) {
+    throw new Error("GitHub artifact 不是有效的油猴脚本。");
+  }
+  return { script, artifact };
 }
 
 function extractUserscriptFromHtml(html) {
@@ -364,38 +568,69 @@ function renderCards(container, items, emptyText) {
     const heading = document.createElement("h3");
     heading.textContent = item.name || item.displayName || item.title || item.id || "Fabushi App";
     const body = document.createElement("p");
+    const release = marketplaceReleaseManifest(item);
     body.textContent = item.description || item.summary || item.blurb || "Fabushi 小程序";
     const meta = document.createElement("div");
     meta.className = "meta";
-    for (const value of [itemVersion(item), item.kind, item.category, item.publisher?.displayName || item.publisher].filter(Boolean).slice(0, 4)) {
+    const contract = marketplaceInstallContract(item);
+    const sourceRef = String(contract?.source?.sourceRef || item.source?.sourceRef || "").trim();
+    const releaseStatus = item.releaseStatus || release?.releaseStatus;
+    const permissions = Array.isArray(item.permissions)
+      ? item.permissions
+      : Array.isArray(contract?.permissions) ? contract.permissions : [];
+    for (const value of [
+      itemVersion(item),
+      sourceRef ? `GitHub · ${sourceRef.slice(0, 9)}` : "",
+      releaseStatus === "approved" ? "已审核发布" : releaseStatus,
+      permissions.length ? `权限 ${permissions.length} 项` : "",
+      item.kind,
+      item.category,
+      item.publisher?.displayName || item.publisher,
+    ].filter(Boolean).slice(0, 6)) {
       const tag = document.createElement("span");
       tag.className = "tag";
       tag.textContent = String(value);
       meta.append(tag);
     }
+    card.append(heading, body, meta);
+    const releaseNotes = item.releaseNotes || release?.releaseNotes;
+    if (releaseNotes) {
+      const notes = document.createElement("small");
+      notes.className = "release-note";
+      notes.textContent = `发布说明：${releaseNotes}`;
+      card.append(notes);
+    }
     const actions = document.createElement("div");
     actions.className = "card-actions";
     const pluginId = itemPluginId(item);
-    if (container.id === "marketplace-list" && userscriptSurface(item)) {
-      const installed = userscriptInstalled(pluginId);
-      const updateAvailable = userscriptUpdateAvailable(item, installed);
+    if (container.id === "marketplace-list" && marketplaceItemInstallable(item)) {
+      const installed = state.installed.find((candidate) => itemPluginId(candidate) === pluginId);
+      const script = userscriptInstalled(pluginId);
+      const action = marketplaceInstallAction(item, installed, script);
       const button = document.createElement("button");
       button.type = "button";
       button.className = "card-action primary";
-      button.textContent = installed ? (updateAvailable ? "更新油猴脚本" : "重新安装油猴脚本") : "安装油猴脚本";
-      button.addEventListener("click", () => void installMarketplaceUserscript(item, button));
+      button.textContent = action === "update" ? "更新" : action === "reinstall" ? "重新安装" : action === "blocked" ? "版本异常" : action === "current" ? "已是最新" : "安装";
+      button.disabled = action === "blocked" || action === "current";
+      button.title = action === "blocked" ? "本地版本比市场版本更新，市场不会静默降级" : action === "current" ? "当前版本与 GitHub 发布物一致" : "从已审核的 GitHub 发布物校验后安装";
+      button.addEventListener("click", () => void installMarketplaceItem(item, button));
       actions.append(button);
       const hint = document.createElement("span");
       hint.className = "action-hint";
-      const installedVersion = item?.bundledFallback
-        ? installed?.version
-        : (installed?.sourcePluginVersion || installed?.version);
-      hint.textContent = updateAvailable
-        ? `已安装 ${installedVersion} · 可更新到 ${itemVersion(item)}`
-        : installed ? "已安装 · ChatGPT 页面可用" : "安装后在 ChatGPT 页面出现按钮";
+      const installedVersion = marketplaceInstalledVersion(item, installed, script);
+      const kind = marketplaceItemKind(item);
+      hint.textContent = action === "update"
+        ? `已安装 ${installedVersion || "旧版本"} · 可更新到 ${itemVersion(item)}`
+        : action === "blocked"
+          ? `本地 ${installedVersion} 高于市场 ${itemVersion(item)}，已阻止降级`
+          : action === "reinstall"
+            ? (kind === "userscript" ? "已安装 · ChatGPT 页面可用" : "已安装 · 可重新校验 GitHub 发布物")
+            : action === "current"
+              ? `已安装 ${installedVersion || itemVersion(item)} · GitHub 发布物一致`
+            : kind === "metadata" ? "打开已审核的线上页面" : "从 GitHub 发布物校验后安装";
       actions.append(hint);
     }
-    card.append(heading, body, meta, actions);
+    card.append(actions);
     container.append(card);
   }
   if (!items.length) {
@@ -464,80 +699,139 @@ function renderUserScripts() {
   $("#userscript-empty").hidden = state.userscripts.length > 0;
 }
 
-async function installMarketplaceUserscript(item, button) {
+async function installMarketplaceItem(item, button) {
   const pluginId = itemPluginId(item);
   if (!pluginId) return;
-  const previouslyInstalled = userscriptInstalled(pluginId);
-  const updating = userscriptUpdateAvailable(item, previouslyInstalled);
+  const previouslyInstalled = state.installed.find((candidate) => itemPluginId(candidate) === pluginId);
+  const previouslyInstalledUserscript = userscriptInstalled(pluginId);
+  const action = marketplaceInstallAction(item, previouslyInstalled, previouslyInstalledUserscript);
+  if (action === "blocked") {
+    showBanner(`${item.displayName || pluginId} 的本地版本高于市场版本，已阻止静默降级。`, "error");
+    return;
+  }
   button.disabled = true;
   const version = itemVersion(item);
   const hasUserscriptSurface = Boolean(userscriptSurface(item));
+  const kind = marketplaceItemKind(item);
   let desktopInstallError = "";
+  let packageInstalled = false;
+  let metadataOpened = false;
   try {
-    let release = item.releaseManifest;
-    if (!hasUserscriptSurface && state.desktopConnected) {
+    let release = marketplaceReleaseManifest(item);
+    const packageInstallRequired = kind === "package" && !hasUserscriptSurface;
+    if (packageInstallRequired && !state.desktopConnected) {
+      throw new Error("这个项目是 GitHub 小程序包，请先启动 Fabushi 桌面端；桌面 Host 会在本机校验后安装。");
+    }
+    if (packageInstallRequired && state.desktopConnected) {
       try {
-        if (!release || !Array.isArray(release.artifacts)) {
+        if (!release || !Array.isArray(release.artifacts) || !release.artifacts.length) {
           const result = await desktopRequest("feature.marketplace.release", { pluginId, version });
-          release = result?.releaseManifest || result;
-        } else if (release.releaseManifest) {
-          release = release.releaseManifest;
+          release = marketplaceReleaseManifest(result);
         }
       } catch (error) {
         desktopInstallError = error.message;
         release = null;
       }
     }
-    if (!hasUserscriptSurface && state.desktopConnected && release && Array.isArray(release.artifacts) && release.artifacts.length) {
+    if (packageInstallRequired && state.desktopConnected && release && Array.isArray(release.artifacts) && release.artifacts.length) {
+      if (release.protocol !== "mahayana.external-release.v1" || release.pluginId !== pluginId || release.version !== version) {
+        throw new Error("市场版本清单的协议、插件 ID 或版本不一致。");
+      }
+      const installContract = marketplaceInstallContract(item) || release.install;
+      const installSource = installContract?.source;
+      if (installContract?.protocol !== "fabushi.marketplace.install.v1"
+        || installContract.strategy !== "github-immutable"
+        || installSource?.marketplaceHostsPackage === true
+        || typeof installSource?.repository !== "string"
+        || typeof installSource?.sourceRef !== "string"
+        || !installSource.sourceRef.trim()) {
+        throw new Error("市场版本没有提供可验证的 GitHub 安装合同。");
+      }
       try {
         await desktopRequest("feature.plugin.install", { release, platform: "chrome-extension" }, 120_000);
+        packageInstalled = true;
       } catch (error) {
         desktopInstallError = error.message;
         try {
           await desktopRequest("feature.plugin.install", { release, platform: "desktop" }, 120_000);
           desktopInstallError = "";
+          packageInstalled = true;
         } catch (fallbackError) {
           desktopInstallError = `${desktopInstallError}; ${fallbackError.message}`;
         }
       }
     }
+    if (packageInstallRequired && !packageInstalled) {
+      throw new Error(desktopInstallError || "市场版本没有可安装的 GitHub artifact。");
+    }
 
-    let source = item.bundledFallback ? await loadOfficialUserscript(item) : "";
-    if (!source && state.desktopConnected) {
+    if (kind === "metadata") {
+      const surface = itemSurfaces(item).find((candidate) => candidate?.kind === "web" && candidate.url);
+      const url = String(item.uiUrl || surface?.url || "").trim();
+      if (!url) throw new Error("市场项目没有声明可打开的线上页面。");
+      await chrome.tabs.create({ url });
+      metadataOpened = true;
+    }
+
+    let source = "";
+    let verifiedUserscriptArtifact = null;
+    if (hasUserscriptSurface) {
+      const remoteUserscript = marketplaceUserscriptArtifact(item);
+      if (remoteUserscript) {
+        const verified = await fetchVerifiedUserscript(item);
+        source = verified.script;
+        verifiedUserscriptArtifact = verified.artifact;
+      } else if (item.bundledFallback) {
+        // Only a legacy item without an install contract may use the signed
+        // extension copy. Current Marketplace entries must take the verified
+        // GitHub branch above.
+        source = await loadBundledUserscript(item);
+      }
+    }
+    if (hasUserscriptSurface && !source && state.desktopConnected) {
       try {
         const result = await desktopRequest("feature.plugin.userScript", { pluginId, version }, 20_000);
         source = String(result?.source || "").trim();
       } catch {}
     }
-    if (!source) {
+    if (hasUserscriptSurface && !source) {
       try {
         const result = await desktopRequest("feature.plugin.uiDocument", { pluginId }, 20_000);
         source = extractUserscriptFromHtml(result?.html);
       } catch {}
     }
-    if (!source && item.bundledFallback) source = await loadBundledUserscript(item);
-    if (!source) throw new Error("市场项目没有提供可读取的 .user.js 文件。");
-    const commands = (item.commands || item.source?.commands || []).map((command) => command.tool || command.name).filter(Boolean);
-    const installed = await runtimeMessage({
-      type: "fabushi.userscript.install",
-      source,
-      sourcePluginId: pluginId,
-      sourcePluginVersion: version,
-      commands,
-    });
-    if (!installed?.ok) throw new Error(installed?.error || "扩展安装油猴脚本失败。");
+    if (hasUserscriptSurface && !source && item.bundledFallback) source = await loadBundledUserscript(item);
+    if (hasUserscriptSurface) {
+      if (!source) throw new Error("市场项目没有提供可读取的 .user.js 文件。");
+      const commands = (item.commands || item.source?.commands || []).map((command) => command.tool || command.name).filter(Boolean);
+      const installed = await runtimeMessage({
+        type: "fabushi.userscript.install",
+        source,
+        sourcePluginId: pluginId,
+        sourcePluginVersion: version,
+        sourceRepository: marketplaceInstallContract(item)?.source?.repository,
+        sourceRef: marketplaceInstallContract(item)?.source?.sourceRef,
+        sourceArtifactSha256: verifiedUserscriptArtifact?.sha256 || verifiedUserscriptArtifact?.artifactSha256,
+        commands,
+      });
+      if (!installed?.ok) throw new Error(installed?.error || "扩展安装油猴脚本失败。");
+    }
     await refreshUserscripts();
     await refreshInstalled();
-    const suffix = hasUserscriptSurface
-      ? "网页油猴脚本已安装；它独立运行在匹配的 ChatGPT 页面。"
-      : desktopInstallError
-      ? "网页脚本已安装；桌面运行时安装未完成，请查看提示。"
-      : !state.desktopConnected
-        ? "网页脚本已安装；桌面端未连接，连接后即可调用后台功能。"
-        : "桌面运行时和网页脚本都已安装；账户将在首次授权的操作时读取。";
-    const action = updating ? "已更新" : previouslyInstalled ? "已重新安装" : "已安装";
-    showBanner(`${item.displayName || pluginId}${action}：${suffix}`, "warning");
-    if (desktopInstallError && !hasUserscriptSurface) showBanner(`网页脚本已安装，但桌面插件安装失败：${desktopInstallError}`, "error");
+    const suffix = metadataOpened
+      ? "已打开线上页面；页面代码仍由声明的 HTTPS Hosted surface 提供。"
+      : packageInstalled && hasUserscriptSurface
+        ? "GitHub 包已校验安装，网页油猴脚本也已就绪。"
+        : packageInstalled
+          ? "GitHub 发布物已校验并安装到 Fabushi Host。"
+        : hasUserscriptSurface
+            ? verifiedUserscriptArtifact
+              ? "GitHub 油猴脚本已校验安装；它独立运行在匹配的 ChatGPT 页面。"
+              : "网页油猴脚本已安装；它独立运行在匹配的 ChatGPT 页面。"
+            : "安装状态已刷新。";
+    const actionLabel = action === "update" ? "已更新" : action === "reinstall" ? "已重新安装" : "已安装";
+    showBanner(`${item.displayName || pluginId}${actionLabel}：${suffix}`, "warning");
+    if (desktopInstallError && packageInstallRequired) showBanner(`GitHub 包安装失败：${desktopInstallError}`, "error");
   } catch (error) {
     showBanner(`安装失败：${error.message}`, "error");
   } finally {
@@ -547,9 +841,22 @@ async function installMarketplaceUserscript(item, button) {
 
 async function refreshMarketplace(query = "") {
   if (!state.desktopConnected) {
-    // The official userscript catalogue and installer are extension-native.
-    // A desktop Host is an optional enhancement, never a startup dependency.
-    state.marketplace = shouldShowBundledFallback(query) ? await bundledMarketplaceItems() : [];
+    // Discovery remains available without Native Messaging. Only metadata is
+    // fetched here; executable code is still either bundled or installed by
+    // the verified Host path below.
+    try {
+      state.marketplace = await fetchPublicMarketplace(query);
+    } catch {
+      state.marketplace = [];
+    }
+    if (shouldShowBundledFallback(query)) {
+      const builtins = await bundledMarketplaceItems();
+      for (const builtin of builtins) {
+        const index = state.marketplace.findIndex((item) => itemPluginId(item) === builtin.pluginId);
+        if (index < 0) state.marketplace.unshift(builtin);
+        else if (compareVersions(itemVersion(builtin), itemVersion(state.marketplace[index])) > 0) state.marketplace[index] = builtin;
+      }
+    }
     renderCards($("#marketplace-list"), state.marketplace, "没有找到可独立安装的 Chrome 项目");
     return;
   }
@@ -581,13 +888,16 @@ async function refreshMarketplace(query = "") {
 async function refreshInstalled() {
   await refreshUserscripts();
   if (!state.desktopConnected) {
+    state.installed = [];
     renderCards($("#miniapp-list"), [], "桌面小程序属于可选增强；下方油猴脚本可独立运行");
+    if (state.view === "marketplace") renderCards($("#marketplace-list"), state.marketplace, "没有找到兼容 Chrome 的项目");
     return;
   }
   try {
     const result = await desktopRequest("feature.plugin.listInstalled");
     state.installed = Array.isArray(result) ? result : Array.isArray(result?.plugins) ? result.plugins : Array.isArray(result?.items) ? result.items : [];
     renderCards($("#miniapp-list"), state.installed, "还没有已安装的小程序");
+    if (state.view === "marketplace") renderCards($("#marketplace-list"), state.marketplace, "没有找到兼容 Chrome 的项目");
     $("#miniapp-empty").hidden = state.installed.length > 0;
   } catch (error) {
     showBanner(error.message, "error");
@@ -651,7 +961,7 @@ async function connectDesktopEnhancements() {
     const auth = await desktopRequest("feature.auth.status", {}, 10_000)
       .catch(() => ({ loggedIn: false, deferred: true, provider: "Fabushi" }));
     if (!state.browserAccount.loggedIn) setAuth(auth);
-    await Promise.allSettled([refreshBrowser(), refreshMarketplace("")]);
+    await Promise.allSettled([refreshBrowser(), refreshMarketplace(""), refreshInstalled()]);
   } catch (error) {
     setDesktopConnection(false, error.message);
   } finally {

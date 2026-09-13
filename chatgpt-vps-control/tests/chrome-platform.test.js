@@ -32,6 +32,7 @@ test("Fabushi Chrome platform includes the product shell, browser bridge, and in
   assert.match(worker, /userscript-runner\.js/);
   assert.match(worker, /platform-bridge\.js/);
   await source("userscript-core.js");
+  await source("marketplace-install.js");
   await source("userscript-runner.js");
   await source("userscript-content.js");
   await source("userscript.css");
@@ -59,6 +60,13 @@ test("Chrome UI delegates account/product work to desktop Host and exposes safe 
   assert.match(app, /feature\.marketplace\.browse/);
   assert.match(app, /desktop\.settings\.open/);
   assert.match(app, /fabushi\.userscript\.install/);
+  assert.match(app, /marketplaceInstallAction/);
+  assert.match(app, /fetchPublicMarketplace/);
+  assert.match(app, /function fetchVerifiedUserscript/);
+  assert.match(app, /raw\.githubusercontent\.com/);
+  assert.match(app, /crypto\.subtle\.digest/);
+  assert.match(app, /redirect: "error"/);
+  assert.match(app, /sourceArtifactSha256/);
   assert.match(app, /fabushi\.userscript\.setEnabled/);
   assert.match(app, /fabushi\.userscript\.uninstall/);
   assert.match(app, /userscript-chatgpt-task-queue/);
