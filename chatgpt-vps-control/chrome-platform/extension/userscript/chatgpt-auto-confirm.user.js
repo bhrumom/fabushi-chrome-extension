@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ChatGPT 自动确认 · Fabushi
 // @namespace    https://fabushi.ombhrum.com/userscripts/chatgpt-auto-confirm
-// @version      2.9.25
+// @version      2.9.26
 // @description  独立单标签任务工作台：目标编排、单次任务、附件粘贴预览、授权识别、实时消息、内存感知与可中断调度。
 // @match        https://chatgpt.com/*
 // @match        https://chat.openai.com/*
@@ -14,7 +14,7 @@
   'use strict';
   if (window.top !== window.self) return;
   const INSTANCE = '__FABUSHI_AUTO_CONFIRM_INSTANCE__';
-  const VERSION = '2.9.25';
+  const VERSION = '2.9.26';
   const BOOTSTRAP_MARKER = 'fabushi-auto-confirm-bootstrap-v1';
   const previousInstance = window[INSTANCE];
   if (previousInstance?.version === VERSION && previousInstance?.active) return;
@@ -2170,14 +2170,29 @@
   }
   function sendTimeoutNotice() {
     const pattern = /消息发送超时\s*[，,]?\s*请重试|message (?:send|sending) timed out|failed to send/i;
-    // Only a visible page-level error is actionable. Do not match the
-    // workbench's own log or a user/assistant message quoting the same text.
+    const retryPattern = /^(?:重试|再次尝试|再试一次|retry|try again|again)(?:\b|$)/i;
+    const retryControls = 'button,a,[role="button"]';
+    const hasRetryControl = node => {
+      let scope = node?.parentElement || null;
+      for (let depth = 0; scope && depth < 8; depth += 1, scope = scope.parentElement) {
+        const controls = [];
+        if (scope.matches?.(retryControls)) controls.push(scope);
+        controls.push(...nodes(retryControls, scope));
+        if (controls.some(control => visible(control) && retryPattern.test(label(control)))) return true;
+      }
+      return false;
+    };
+    // A visible page-level error is actionable. When ChatGPT renders the
+    // error inside an assistant turn, require a nearby retry control so a
+    // quoted transcript sentence cannot trigger a duplicate dispatch.
     const walker = document.createTreeWalker(document.body || document.documentElement, NodeFilter.SHOW_TEXT);
     let currentNode;
     while ((currentNode = walker.nextNode())) {
       const parent = currentNode.parentElement;
-      if (!parent || own(parent) || parent.closest('[data-message-author-role]')) continue;
-      if (pattern.test(normalize(currentNode.nodeValue)) && visible(parent)) return true;
+      if (!parent || own(parent)) continue;
+      if (!pattern.test(normalize(currentNode.nodeValue)) || !visible(parent)) continue;
+      const message = parent.closest('[data-message-author-role]');
+      if (!message || hasRetryControl(parent)) return true;
     }
     return false;
   }
@@ -3561,7 +3576,7 @@ NaN
     lastSwitch = Date.now();
     // Opening a conversation is a manual inspection action. Pause only this
     // task before the document changes; unrelated tasks must keep running.
-    pauseTask(task, '已暂停当前任务，正在打开已记录会话；其他任务继续运行。');
+    pauseTask(task, '用户点击“打开已记录会话链接”，已暂停当前任务；其他任务继续运行。点击“继续此任务”可恢复。');
     sessionStorage.removeItem(NAV);
     return target;
   }
