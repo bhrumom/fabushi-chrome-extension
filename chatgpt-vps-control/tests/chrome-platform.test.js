@@ -29,11 +29,13 @@ test("Fabushi Chrome platform includes the product shell, browser bridge, and in
   assert.match(worker, /platform-bridge\.js/);
   assert.match(worker, /browser-control\.js/);
   assert.match(worker, /account-browser-agent\.js/);
+  assert.match(worker, /userscript-recovery\.js/);
   assert.match(worker, /userscript-runner\.js/);
   assert.match(worker, /platform-bridge\.js/);
   await source("userscript-core.js");
   await source("marketplace-install.js");
   await source("userscript-runner.js");
+  await source("userscript-recovery.js");
   await source("userscript-content.js");
   await source("userscript.css");
   await source("userscript/chatgpt-auto-confirm.user.js");

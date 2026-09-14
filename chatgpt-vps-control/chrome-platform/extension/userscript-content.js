@@ -11,10 +11,45 @@ function postResponse(requestId, ok, payload) {
   }, "*");
 }
 
+function postRecoveryResponse(requestId, response) {
+  const granted = response?.ok === true && response?.granted === true;
+  window.postMessage({
+    source: RESPONSE_SOURCE,
+    type: granted ? "recovery-capability.granted" : "recovery-capability.denied",
+    requestId: String(requestId),
+    granted,
+    ...(granted ? {
+      capability: response.capability,
+      expiresAt: response.expiresAt,
+      monitorIntervalMs: response.monitorIntervalMs,
+    } : { error: String(response?.error || "Fabushi 宿主未授予标签页恢复能力") }),
+  }, "*");
+}
+
 window.addEventListener("message", (event) => {
   if (event.source !== window) return;
   const data = event.data;
-  if (!data || data.source !== REQUEST_SOURCE || data.type !== "request" || !data.requestId) return;
+  if (!data || data.source !== REQUEST_SOURCE || !data.requestId) return;
+  if (data.type === "recovery-capability.request") {
+    chrome.runtime.sendMessage({
+      type: "fabushi.userscript.recovery.request",
+      requestId: String(data.requestId),
+      payload: data.payload,
+    }, (response) => {
+      const runtimeError = chrome.runtime.lastError;
+      postRecoveryResponse(data.requestId, runtimeError ? { ok:false, error:runtimeError.message } : response);
+    });
+    return;
+  }
+  if (data.type === "recovery-capability.release") {
+    chrome.runtime.sendMessage({
+      type: "fabushi.userscript.recovery.release",
+      requestId: String(data.requestId),
+      payload: data.payload,
+    }).catch(() => {});
+    return;
+  }
+  if (data.type !== "request") return;
   chrome.runtime.sendMessage({
     type: "fabushi.userscript.request",
     requestId: String(data.requestId),
