@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ChatGPT 自动确认 · Fabushi
 // @namespace    https://fabushi.ombhrum.com/userscripts/chatgpt-auto-confirm
-// @version      2.9.24
+// @version      2.9.25
 // @description  独立单标签任务工作台：目标编排、单次任务、附件粘贴预览、授权识别、实时消息、内存感知与可中断调度。
 // @match        https://chatgpt.com/*
 // @match        https://chat.openai.com/*
@@ -14,7 +14,7 @@
   'use strict';
   if (window.top !== window.self) return;
   const INSTANCE = '__FABUSHI_AUTO_CONFIRM_INSTANCE__';
-  const VERSION = '2.9.24';
+  const VERSION = '2.9.25';
   const BOOTSTRAP_MARKER = 'fabushi-auto-confirm-bootstrap-v1';
   const previousInstance = window[INSTANCE];
   if (previousInstance?.version === VERSION && previousInstance?.active) return;
@@ -65,6 +65,10 @@
   // catches the renderer state where Stop disappeared but no answer/card was
   // rendered, without treating a brief transition as a failure.
   const STOP_LOST_FINAL_REPLY_MS = 15000;
+  // A final answer may become static on a document that was previously
+  // observed in loading/generating state. Keep a short grace period, then
+  // finish even when the prior scan was not itself a clear observation.
+  const FINAL_REPLY_STABILITY_MS = 4000;
   const ROUTE_HYDRATION_TIMEOUT_MS = 30000;
   const ROUTE_RECOVERY_LIMIT = 2;
   const CONNECTION_INTERRUPTED_REFRESH_LIMIT = 2;
@@ -2333,10 +2337,23 @@
     const responseActionsComplete = responseActions.has('copy')
       && (responseActions.has('like') || responseActions.has('dislike'))
       && (responseActions.has('dislike') || responseActions.has('regenerate') || responseActions.has('more') || responseActions.has('branch'));
+    // ChatGPT has shipped renderer variants where the static marker lives on
+    // the markdown node (or on a turn wrapper without a message/turn id).
+    // The node is already scoped to the latest assistant turn, so requiring a
+    // legacy id here rejects a genuinely finished reply after a page rotation.
+    const hasCompletionMarker = node => {
+      if (!node) return false;
+      const streaming = node.getAttribute?.('data-is-streaming');
+      const busy = node.getAttribute?.('aria-busy');
+      const state = node.getAttribute?.('data-state') || node.getAttribute?.('data-status') || '';
+      return streaming === 'false'
+        || busy === 'false'
+        || node.getAttribute?.('data-complete') === 'true'
+        || /^(?:complete|completed|done|finished|success|idle)$/i.test(state);
+    };
     const explicitFinal = Boolean(
       markdown
-      && [assistant, article].some(node => node?.getAttribute?.('data-is-streaming') === 'false'
-        && (node.hasAttribute?.('data-message-id') || node.hasAttribute?.('data-turn-key') || node.hasAttribute?.('data-content-search-turn-key'))),
+      && [markdown, assistant, article].some(hasCompletionMarker),
     );
     const streaming = article?.querySelector('[data-is-streaming="true"],[aria-busy="true"]')
       || [assistant, article].find(node => node?.getAttribute?.('data-is-streaming') === 'true' || node?.getAttribute?.('aria-busy') === 'true');
@@ -2523,7 +2540,13 @@
     if (sample.cards) return { state:'approval' };
     if (sample.stop) return { state:'generating' };
     if (sample.loading) return { state:'loading', reason:'ChatGPT 页面正在加载，等待会话内容完全渲染。' };
-    if (sample.final && sample.text && previous?.clear && previous?.text === sample.text && now - previous.since >= 4000) return { state:'complete' };
+    const finalStayedStable = sample.final && sample.text && previous?.final
+      && previous?.text === sample.text
+      && now - Number(previous.finalSince || previous.since || 0) >= FINAL_REPLY_STABILITY_MS;
+    const finalWasStableBeforeTransition = sample.final && sample.text && previous?.clear
+      && previous?.text === sample.text
+      && now - previous.since >= FINAL_REPLY_STABILITY_MS;
+    if (finalStayedStable || finalWasStableBeforeTransition) return { state:'complete' };
     // ChatGPT can lose the Stop control while the assistant turn is still
     // absent (or while a renderer error leaves only a partial/empty turn).
     // Once that transition remains stable, it is an abnormal end and must be
@@ -3144,11 +3167,16 @@
     const clear = !sample.stop && !sample.cards && !sample.loading;
     const stable = previous?.text === sample.text && previous?.clear && clear;
     const endedAt = abnormalEndSince(sample, previous, now);
+    const finalSince = sample.final && previous?.final && previous?.text === sample.text
+      ? (previous.finalSince || previous.since || now)
+      : sample.final ? now : 0;
     observations.set(task.id, {
       text:sample.text,
       since:stable ? previous.since : now,
       idleSince:previous?.clear ? previous.idleSince : now,
       endedAt,
+      final:Boolean(sample.final),
+      finalSince,
       stop:Boolean(sample.stop),
       loading:Boolean(sample.loading),
       clear,
