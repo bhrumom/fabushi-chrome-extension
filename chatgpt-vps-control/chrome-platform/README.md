@@ -6,4 +6,4 @@ The CI scope-aware workflows classify this boundary explicitly. Workflow, scope-
 
 This line is a scope-regression fixture: a documentation-only change in this directory should still select Chrome validation and Node security while leaving unrelated platform checks skipped.
 
-Final verification marker: this file is intentionally changed without touching any other product boundary.
+Main-push verification marker (2026-09-14): this file is intentionally changed without touching any other product boundary.
