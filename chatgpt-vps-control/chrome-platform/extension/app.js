@@ -15,9 +15,9 @@ const labels = { chats: "聊天", miniapps: "小程序", marketplace: "Marketpla
 const BUNDLED_USERSCRIPT_PATH = "userscript/chatgpt-auto-confirm.user.js";
 const MARKETPLACE_API_ROOT = "https://api.ombhrum.com";
 const MARKETPLACE_USERSCRIPT_REPOSITORY = "https://github.com/bhrumom/fabushi-chatgpt-auto-confirm-userscript";
-const MARKETPLACE_USERSCRIPT_COMMIT = "422f05eae88c17bbfa5e3d0812fc975637108c1c";
-const MARKETPLACE_USERSCRIPT_SHA256 = "ae8a15b687dcfca5c83e1f62093a6925eb50394196a5fc6b82e7859996d97c0c";
-const MARKETPLACE_USERSCRIPT_SIZE = 217125;
+const MARKETPLACE_USERSCRIPT_COMMIT = "480ebe61ba039f15e7023bbc0253ea23c373aba0";
+const MARKETPLACE_USERSCRIPT_SHA256 = "d15040a5d420b0fa4cc38b195f178143a2d22a166e3357f88c7159c6b7a3b14a";
+const MARKETPLACE_USERSCRIPT_SIZE = 224113;
 const MARKETPLACE_TASK_QUEUE_REPOSITORY = "https://github.com/bhrumom/fabushi";
 const MARKETPLACE_TASK_QUEUE_COMMIT = "a9d0b883c68dd45c14f9966ab79656bcf43c4d0e";
 const MARKETPLACE_TASK_QUEUE_SHA256 = "38bec5437d9a2ad3d04c4e138b2cf681fb788932b133696744ffdf05e4d45b38";
@@ -257,7 +257,7 @@ const BUILTIN_MARKETPLACE_ITEM = {
   description: "独立运行于 ChatGPT 网页的自动确认、对话和可恢复任务队列控制台，不依赖 Fabushi 桌面端。",
   // Keep a signed local compatibility copy while the remote catalogue is
   // unavailable. The install/update path below uses the pinned GitHub release.
-  latestVersion: "2.9.26",
+  latestVersion: "2.9.30",
   bundledFallback: true,
   platforms: ["desktop", "cli", "chrome-extension"],
   matches: ["https://chatgpt.com/*", "https://chat.openai.com/*"],
@@ -267,7 +267,7 @@ const BUILTIN_MARKETPLACE_ITEM = {
     provider: "github",
     repository: MARKETPLACE_USERSCRIPT_REPOSITORY,
     sourceRef: MARKETPLACE_USERSCRIPT_COMMIT,
-    releaseUrl: `${MARKETPLACE_USERSCRIPT_REPOSITORY}/releases/tag/v2.9.26`,
+    releaseUrl: `${MARKETPLACE_USERSCRIPT_REPOSITORY}/releases/tag/v2.9.30`,
     surfaces: [{ id: "userscript", kind: "userscript", title: "ChatGPT 网页油猴脚本", entry: "userscript/chatgpt-auto-confirm.user.js", platforms: ["chrome-extension"] }],
     commands: [],
   },
@@ -278,12 +278,12 @@ const BUILTIN_MARKETPLACE_ITEM = {
     protocol: "fabushi.marketplace.install.v1",
     strategy: "github-immutable",
     pluginId: "chatgpt-auto-confirm",
-    version: "2.9.26",
+    version: "2.9.30",
     source: {
       provider: "github",
       repository: MARKETPLACE_USERSCRIPT_REPOSITORY,
       sourceRef: MARKETPLACE_USERSCRIPT_COMMIT,
-      releaseUrl: `${MARKETPLACE_USERSCRIPT_REPOSITORY}/releases/tag/v2.9.26`,
+      releaseUrl: `${MARKETPLACE_USERSCRIPT_REPOSITORY}/releases/tag/v2.9.30`,
       marketplaceHostsPackage: false,
     },
     artifacts: [{
@@ -311,7 +311,7 @@ const BUILTIN_MARKETPLACE_ITEM = {
     schemaVersion: 1,
     protocol: "mahayana.external-release.v1",
     pluginId: "chatgpt-auto-confirm",
-    version: "2.9.26",
+    version: "2.9.30",
     runtimeForm: "userscript",
     permissions: ["读取 ChatGPT 页面状态", "显示任务队列", "仅在匹配页面运行"],
     artifacts: [{
@@ -331,12 +331,12 @@ const BUILTIN_MARKETPLACE_ITEM = {
       protocol: "fabushi.marketplace.install.v1",
       strategy: "github-immutable",
       pluginId: "chatgpt-auto-confirm",
-      version: "2.9.26",
+      version: "2.9.30",
       source: {
         provider: "github",
         repository: MARKETPLACE_USERSCRIPT_REPOSITORY,
         sourceRef: MARKETPLACE_USERSCRIPT_COMMIT,
-        releaseUrl: `${MARKETPLACE_USERSCRIPT_REPOSITORY}/releases/tag/v2.9.26`,
+        releaseUrl: `${MARKETPLACE_USERSCRIPT_REPOSITORY}/releases/tag/v2.9.30`,
         marketplaceHostsPackage: false,
       },
       artifacts: [{
