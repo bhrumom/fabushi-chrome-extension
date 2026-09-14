@@ -1,4 +1,5 @@
 import { normalizeUserScript, publicUserScript, userScriptMatches } from "./userscript-core.js";
+import { MEMORY_CAPABILITY, MEMORY_DISCARD_COOLDOWN_MS, MEMORY_PLUGIN_ID, validateMemoryRequest } from "./userscript-memory-policy.js";
 
 const STORAGE_KEY = "fabushi.userscripts.v1";
 const BUNDLED_PLUGIN_ID = "chatgpt-auto-confirm";
@@ -7,6 +8,7 @@ const MAX_CALL_TIMEOUT_MS = 86_400_000;
 let reconcilePromise;
 const registerPromises = new Map();
 const activationPromises = new Map();
+const memoryDiscardedAt = new Map();
 
 function compareVersions(left, right) {
   const a = String(left || "").trim().replace(/^v/i, "");
@@ -306,6 +308,38 @@ async function callInstalledPlugin(message, sender) {
       arguments: args,
     },
   }, timeoutMs);
+}
+
+function pruneMemoryDiscardCooldowns(now = Date.now()) {
+  for (const [key, at] of memoryDiscardedAt) {
+    if (now - Number(at || 0) > MEMORY_DISCARD_COOLDOWN_MS * 2) memoryDiscardedAt.delete(key);
+  }
+}
+
+async function requestTabMemoryCleanup(message, sender) {
+  const pluginId = String(message?.pluginId || "").trim();
+  const scriptId = String(message?.scriptId || "").trim();
+  if (pluginId !== MEMORY_PLUGIN_ID) throw new Error("内存回收能力只对 ChatGPT 自动确认脚本开放。");
+  const records = await readRecords();
+  const record = records.find(item => item?.sourcePluginId === MEMORY_PLUGIN_ID
+    && (item.sourcePluginId === pluginId || item.id === scriptId));
+  if (!record || record.enabled === false) throw new Error("该用户脚本尚未启用宿主内存回收能力。");
+  const tabId = sender?.tab?.id;
+  if (!Number.isInteger(tabId) || tabId < 0) throw new Error("用户脚本请求没有关联网页标签页。");
+  let tab;
+  try { tab = await chrome.tabs.get(tabId); }
+  catch { return { ok:false, discarded:false, reason:"tab-unavailable" }; }
+  const now = Date.now();
+  pruneMemoryDiscardCooldowns(now);
+  const key = String(tabId) + ":" + String(record.id);
+  const lastAt = Number(memoryDiscardedAt.get(key) || 0);
+  const cooldownRemaining = lastAt ? Math.max(0, MEMORY_DISCARD_COOLDOWN_MS - (now - lastAt)) : 0;
+  const decision = validateMemoryRequest({ ...message, pluginId }, { record, tab, cooldownRemaining });
+  if (!decision.ok || decision.reason !== "ready" || decision.canDiscard !== true) return decision;
+  try { await chrome.tabs.discard(tabId); }
+  catch { return { ok:false, discarded:false, reason:"discard-failed", tabId }; }
+  memoryDiscardedAt.set(key, now);
+  return { ok:true, discarded:true, reason:"discarded", tabId };
 }
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {

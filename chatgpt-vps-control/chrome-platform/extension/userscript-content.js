@@ -26,6 +26,16 @@ function postRecoveryResponse(requestId, response) {
   }, "*");
 }
 
+function postMemoryResponse(requestId, response) {
+  const ok = response?.ok === true;
+  window.postMessage({
+    source: RESPONSE_SOURCE,
+    type: "tab-memory.response",
+    requestId: String(requestId),
+    ok,
+    ...(ok ? { result: response.result } : { error: String(response?.error || "Fabushi 宿主暂时无法回收标签页") }),
+  }, "*");
+}
 window.addEventListener("message", (event) => {
   if (event.source !== window) return;
   const data = event.data;
@@ -47,6 +57,33 @@ window.addEventListener("message", (event) => {
       requestId: String(data.requestId),
       payload: data.payload,
     }).catch(() => {});
+    return;
+  }
+  if (data.type === "tab-memory.request") {
+    chrome.runtime.sendMessage({
+      type: "fabushi.userscript.memory.request",
+      requestId: String(data.requestId),
+      scriptId: data.scriptId,
+      pluginId: data.pluginId,
+      payload: data.payload && typeof data.payload === "object" && !Array.isArray(data.payload) ? {
+        capability: String(data.payload.capability || "").slice(0, 64),
+        version: String(data.payload.version || "").slice(0, 32),
+        pressure: String(data.payload.pressure || "").slice(0, 16),
+        usedBytes: Number(data.payload.usedBytes) || 0,
+        totalBytes: Number(data.payload.totalBytes) || 0,
+        limitBytes: Number(data.payload.limitBytes) || 0,
+        ratio: Number(data.payload.ratio) || 0,
+        hidden: data.payload.hidden === true,
+        safeToDiscard: data.payload.safeToDiscard === true,
+        hasDraft: data.payload.hasDraft === true,
+        hasPendingAttachment: data.payload.hasPendingAttachment === true,
+        userInitiated: data.payload.userInitiated === true,
+        reason: String(data.payload.reason || "").slice(0, 80),
+      } : {},
+    }, (response) => {
+      const runtimeError = chrome.runtime.lastError;
+      postMemoryResponse(data.requestId, runtimeError ? { ok:false, error:runtimeError.message } : response);
+    });
     return;
   }
   if (data.type !== "request") return;
