@@ -1,5 +1,5 @@
 import { normalizeUserScript, publicUserScript, userScriptMatches } from "./userscript-core.js";
-import { MEMORY_CAPABILITY, MEMORY_DISCARD_COOLDOWN_MS, MEMORY_PLUGIN_ID, validateMemoryRequest } from "./userscript-memory-policy.js";
+import { MEMORY_DISCARD_COOLDOWN_MS, MEMORY_PLUGIN_ID, validateMemoryRequest } from "./userscript-memory-policy.js";
 
 const STORAGE_KEY = "fabushi.userscripts.v1";
 const BUNDLED_PLUGIN_ID = "chatgpt-auto-confirm";
@@ -386,6 +386,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     void runMatchingScripts(tabId, message.url || sender?.tab?.url || "")
       .then((started) => sendResponse({ ok: true, started }))
       .catch((error) => sendResponse({ ok: false, error: error?.message || String(error) }));
+    return true;
+  }
+  if (message.type === "fabushi.userscript.memory.request") {
+    requestTabMemoryCleanup(message, sender).then((result) => sendResponse({ ok: true, result }), (error) => sendResponse({ ok: false, error: error?.message || String(error) }));
     return true;
   }
   if (message.type === "fabushi.userscript.request") {
