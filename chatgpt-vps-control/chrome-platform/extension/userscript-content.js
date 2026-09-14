@@ -26,6 +26,44 @@ function postRecoveryResponse(requestId, response) {
   }, "*");
 }
 
+function postNavigationResponse(requestId, response) {
+  const granted = response?.ok === true && response?.granted === true;
+  const capability = String(response?.capability || "tab-navigation-guard").slice(0, 64);
+  window.postMessage({
+    source: RESPONSE_SOURCE,
+    type: granted ? "navigation-guard.granted" : "navigation-guard.denied",
+    requestId: String(requestId),
+    granted,
+    capability,
+    ...(granted ? {
+      leaseId: String(response?.leaseId || "").slice(0, 128),
+      expiresAt: Number(response?.expiresAt) || 0,
+      minIntervalMs: Number(response?.minIntervalMs) || 0,
+    } : {
+      reason: String(response?.reason || "denied").slice(0, 120),
+      retryAfterMs: Math.max(0, Math.min(60_000, Number(response?.retryAfterMs) || 0)),
+      error: String(response?.error || "Fabushi 宿主暂未授予页面导航能力").slice(0, 160),
+    }),
+  }, "*");
+}
+
+function navigationPayload(payload) {
+  const value = payload && typeof payload === "object" && !Array.isArray(payload) ? payload : {};
+  return {
+    capability: String(value.capability || "").slice(0, 64),
+    ownerTabId: String(value.ownerTabId || "").slice(0, 120),
+    taskId: String(value.taskId || "").slice(0, 160),
+    taskURL: String(value.taskURL || "").slice(0, 2_000),
+    targetURL: String(value.targetURL || "").slice(0, 2_000),
+    phase: String(value.phase || "work").slice(0, 40),
+    round: Number.isFinite(Number(value.round)) ? Math.max(0, Math.min(100_000, Number(value.round))) : 0,
+    goalRevision: Number.isFinite(Number(value.goalRevision)) ? Math.max(0, Math.min(100_000, Number(value.goalRevision))) : 0,
+    reason: String(value.reason || "route-switch").slice(0, 80),
+    force: value.force === true,
+    recovery: value.recovery === true,
+  };
+}
+
 function postMemoryResponse(requestId, response) {
   const ok = response?.ok === true;
   window.postMessage({
@@ -40,6 +78,19 @@ window.addEventListener("message", (event) => {
   if (event.source !== window) return;
   const data = event.data;
   if (!data || data.source !== REQUEST_SOURCE || !data.requestId) return;
+  if (data.type === "navigation-guard.request") {
+    chrome.runtime.sendMessage({
+      type: "fabushi.userscript.navigation.request",
+      requestId: String(data.requestId),
+      scriptId: String(data.scriptId || "").slice(0, 160),
+      pluginId: String(data.pluginId || "").slice(0, 64),
+      payload: navigationPayload(data.payload),
+    }, (response) => {
+      const runtimeError = chrome.runtime.lastError;
+      postNavigationResponse(data.requestId, runtimeError ? { ok:false, error:runtimeError.message } : response);
+    });
+    return;
+  }
   if (data.type === "recovery-capability.request") {
     chrome.runtime.sendMessage({
       type: "fabushi.userscript.recovery.request",

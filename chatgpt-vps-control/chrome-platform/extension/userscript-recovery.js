@@ -234,7 +234,7 @@ async function scanRecoveryRecords(trigger = "alarm") {
       }
       let tab;
       try { tab = await chrome.tabs.get(Number(record.tabId)); } catch { tab = null; }
-      const crash = !tab || isCrashURL(tab.url) || tab.discarded === true || isCrashTitle(tab.title);
+      const crash = !tab || tab.status === "unloaded" || isCrashURL(tab.url) || tab.discarded === true || isCrashTitle(tab.title);
       const stale = now - Number(record.lastSeenAt || 0) >= HEARTBEAT_STALE_MS;
       if (!crash && !stale) continue;
       const recovered = await recoverRecord(record, tab, crash ? "crashed-tab" : `${trigger}:stale-heartbeat`).catch(() => null);

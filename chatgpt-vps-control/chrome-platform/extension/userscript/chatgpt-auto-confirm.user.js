@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ChatGPT 自动确认 · Fabushi
 // @namespace    https://fabushi.ombhrum.com/userscripts/chatgpt-auto-confirm
-// @version      2.9.23
+// @version      2.9.24
 // @description  独立单标签任务工作台：目标编排、单次任务、附件粘贴预览、授权识别、实时消息、内存感知与可中断调度。
 // @match        https://chatgpt.com/*
 // @match        https://chat.openai.com/*
@@ -14,7 +14,7 @@
   'use strict';
   if (window.top !== window.self) return;
   const INSTANCE = '__FABUSHI_AUTO_CONFIRM_INSTANCE__';
-  const VERSION = '2.9.23';
+  const VERSION = '2.9.24';
   const BOOTSTRAP_MARKER = 'fabushi-auto-confirm-bootstrap-v1';
   const previousInstance = window[INSTANCE];
   if (previousInstance?.version === VERSION && previousInstance?.active) return;
@@ -118,6 +118,18 @@
   const MEMORY_LOCAL_CLEANUP_COOLDOWN_MS = 60000;
   const MEMORY_HOST_REQUEST_COOLDOWN_MS = 5 * 60 * 1000;
   const MEMORY_HOST_RESPONSE_TTL_MS = 10000;
+  // Full ChatGPT document navigations are expensive. The host guard adds a
+  // second, cross-document budget; these local limits remain effective when
+  // the script is used without Fabushi.
+  const HOST_NAVIGATION_CAPABILITY = 'tab-navigation-guard';
+  const HOST_NAVIGATION_REQUEST_TYPE = 'navigation-guard.request';
+  const HOST_NAVIGATION_GRANTED_TYPE = 'navigation-guard.granted';
+  const HOST_NAVIGATION_DENIED_TYPE = 'navigation-guard.denied';
+  const HOST_NAVIGATION_RESPONSE_TTL_MS = 5000;
+  const LOCAL_NAVIGATION_COOLDOWN_MS = 30000;
+  const LOCAL_NAVIGATION_BURST_WINDOW_MS = 5 * 60 * 1000;
+  const LOCAL_NAVIGATION_BURST_LIMIT = 6;
+  const LOCAL_NAVIGATION_BREAK_MS = 60000;
   const MEMORY_SOFT_LIMIT_BYTES = 768 * 1024 * 1024;
   const MEMORY_HARD_LIMIT_BYTES = 1536 * 1024 * 1024;
   const MEMORY_RATIO_MIN_BYTES = 256 * 1024 * 1024;
@@ -419,6 +431,8 @@
   let hostRecoveryReleaseSent = false;
   const hostRecoveryPending = new Map();
   const hostMemoryPending = new Map();
+  const hostNavigationPending = new Map();
+  let navigationRequestPending = false;
   let memoryMonitorTimer = null;
   let memoryMonitorBusy = false;
   let memoryPressureStreak = 0;
@@ -509,6 +523,218 @@
     }
     hostRecoveryCapability = { status:'released', granted:false, expiresAt:0 };
     hostRecoveryLastHeartbeatAt = 0;
+  }
+  function navigationGuardStorageKey() {
+    return 'fabushi-navigation-guard-v1:' + tabId;
+  }
+  function readNavigationGuardState(now = Date.now()) {
+    const stored = read(navigationGuardStorageKey(), {});
+    const recent = Array.isArray(stored?.recent)
+      ? stored.recent.map(value => Number(value)).filter(value => Number.isFinite(value) && now - value >= 0 && now - value < LOCAL_NAVIGATION_BURST_WINDOW_MS).slice(-LOCAL_NAVIGATION_BURST_LIMIT)
+      : [];
+    return { lastAt:Number(stored?.lastAt || 0), recent };
+  }
+  function rememberNavigationGrant(now = Date.now()) {
+    const state = readNavigationGuardState(now);
+    state.recent.push(now);
+    localStorage.setItem(navigationGuardStorageKey(), JSON.stringify({
+      lastAt:now,
+      recent:state.recent.slice(-LOCAL_NAVIGATION_BURST_LIMIT),
+    }));
+  }
+  function localNavigationDecision({ force = false } = {}) {
+    if (force) return { granted:true, reason:'forced' };
+    const now = Date.now();
+    const state = readNavigationGuardState(now);
+    const cooldownRemaining = state.lastAt
+      ? Math.max(0, LOCAL_NAVIGATION_COOLDOWN_MS - (now - state.lastAt))
+      : 0;
+    if (cooldownRemaining > 0) {
+      return { granted:false, reason:'local-cooldown', retryAfterMs:cooldownRemaining };
+    }
+    if (state.recent.length >= LOCAL_NAVIGATION_BURST_LIMIT) {
+      return { granted:false, reason:'local-break', retryAfterMs:LOCAL_NAVIGATION_BREAK_MS };
+    }
+    return { granted:true, reason:'local-ready' };
+  }
+  function settleHostNavigationRequest(requestId, result) {
+    const pending = hostNavigationPending.get(requestId);
+    if (!pending) return;
+    hostNavigationPending.delete(requestId);
+    const granted = result?.granted === true;
+    if (granted) rememberNavigationGrant();
+    pending.resolve({
+      granted,
+      reason:String(result?.reason || (granted ? 'granted' : 'denied')).slice(0, 120),
+      retryAfterMs:Math.max(0, Math.min(LOCAL_NAVIGATION_BREAK_MS, Number(result?.retryAfterMs) || 0)),
+      fallback:result?.fallback === true,
+    });
+  }
+  function requestHostNavigationPermit(targetHref, task, { force = false, recovery = false, reason = 'route-switch' } = {}) {
+    const local = localNavigationDecision({ force });
+    if (!local.granted) return Promise.resolve(local);
+    if (force || typeof window.postMessage !== 'function') {
+      rememberNavigationGrant();
+      return Promise.resolve({ granted:true, fallback:true, reason:force ? 'forced' : 'standalone' });
+    }
+    const requestId = 'fabushi-navigation-' + id();
+    const payload = {
+      capability:HOST_NAVIGATION_CAPABILITY,
+      ownerTabId:String(tabId),
+      taskId:String(task?.id || current || ''),
+      taskURL:canonicalConversationURL(task?.url) || '',
+      targetURL:String(targetHref || '').slice(0, 2000),
+      phase:String(task?.phase || 'work').slice(0, 40),
+      round:Number(task?.round || 0),
+      goalRevision:Number(task?.goalRevision || 0),
+      reason:String(reason || 'route-switch').slice(0, 80),
+      force:force === true,
+      recovery:recovery === true,
+    };
+    return new Promise(resolve => {
+      hostNavigationPending.set(requestId, { resolve });
+      try {
+        window.postMessage({
+          source:'fabushi-userscript',
+          type:HOST_NAVIGATION_REQUEST_TYPE,
+          requestId,
+          payload,
+        }, '*');
+      } catch {
+        settleHostNavigationRequest(requestId, { granted:true, fallback:true, reason:'post-message-failed' });
+        return;
+      }
+      window.setTimeout(() => {
+        // A plain standalone userscript has no content bridge. Keep it
+        // functional, but retain the local cooldown/burst budget above.
+        if (hostNavigationPending.has(requestId)) {
+          settleHostNavigationRequest(requestId, { granted:true, fallback:true, reason:'host-timeout' });
+        }
+      }, HOST_NAVIGATION_RESPONSE_TTL_MS);
+    });
+  }
+  function cancelHostNavigationRequests(reason = 'shutdown') {
+    for (const requestId of [...hostNavigationPending.keys()]) {
+      settleHostNavigationRequest(requestId, { granted:false, reason });
+    }
+  }
+  function navigationTicketFor(targetHref, task, targetPath, options = {}) {
+    return {
+      taskId:task?.id || current,
+      targetHref,
+      targetPath,
+      phase:String(task?.phase || 'work'),
+      round:Number(task?.round || 0),
+      goalRevision:Number(task?.goalRevision || 0),
+      recovery:options.recovery === true,
+    };
+  }
+  function validNavigationTicket(ticket) {
+    if (!ticket || ticket.resume !== true || ticket.direct !== true || !ticket.task) return false;
+    const task = data.tasks.find(item => item.id === ticket.task && taskBelongsToTab(item));
+    if (!task || terminal.has(task.state) || task.state === 'paused') return false;
+    const phase = String(task.phase || 'work');
+    const round = Number(task.round || 0);
+    const goalRevision = Number(task.goalRevision || 0);
+    if (String(ticket.phase || '') !== phase
+      || Number(ticket.round || 0) !== round
+      || Number(ticket.goalRevision || 0) !== goalRevision) return false;
+    const targetHref = String(ticket.href || '');
+    const targetPath = String(ticket.path || '');
+    if (!targetHref || !targetPath || targetPath === '*') return false;
+    let target;
+    try { target = new URL(targetHref, location.origin); } catch { return false; }
+    if (target.origin !== location.origin || target.search) return false;
+    const taskURL = canonicalConversationURL(task.url);
+    const targetURL = canonicalConversationURL(target.href);
+    if (ticket.purpose === 'dispatch') {
+      if (ticket.recovery || ticket.documentRecovery || task.attempted) return false;
+      if (target.pathname === '/') {
+        return !taskURL && ['queued', 'sending'].includes(task.state);
+      }
+      return Boolean(taskURL && targetURL && taskURL === targetURL && resumableStates.has(task.state));
+    }
+    if (ticket.purpose === 'recovery') {
+      if (!ticket.recovery && !ticket.documentRecovery) return false;
+      if (!resumableStates.has(task.state)) return false;
+      if (ticket.documentRecovery) return target.pathname === '/';
+      return Boolean(target.pathname === '/'
+        || (taskURL && targetURL && taskURL === targetURL));
+    }
+    return false;
+  }
+
+  function beginGuardedNavigation(targetHref, task, {
+    replace = true,
+    force = false,
+    recovery = false,
+    ticketPath = '',
+    ticketHref = '',
+    reason = 'route-switch',
+  } = {}) {
+    if (navigationRequestPending) return false;
+    const targetPath = ticketPath || new URL(targetHref, location.origin).pathname;
+    const expected = navigationTicketFor(targetHref, task, targetPath, { recovery });
+    navigationRequestPending = true;
+    navigating = true;
+    void requestHostNavigationPermit(targetHref, task, { force, recovery, reason }).then(result => {
+      if (!result?.granted) {
+        navigating = false;
+        if (task && !terminal.has(task.state) && task.state !== 'paused') {
+          const now = Date.now();
+          const retryAfterMs = Math.max(1000, Number(result.retryAfterMs) || LOCAL_NAVIGATION_COOLDOWN_MS);
+          if (now - Number(task.navigationGuardNoticeAt || 0) >= LOCAL_NAVIGATION_COOLDOWN_MS) {
+            task.navigationGuardNoticeAt = now;
+            log(task, '宿主正在保护 ChatGPT 页面，已暂缓本次切页；任务会在冷却后继续检查，不会重复派发。');
+          }
+          task.navigationGuardRetryAt = now + retryAfterMs;
+          task.updatedAt = now;
+          save();
+        }
+        schedule(Math.max(1000, Number(result.retryAfterMs) || LOCAL_NAVIGATION_COOLDOWN_MS));
+        return;
+      }
+      const latest = data.tasks.find(item => item.id === expected.taskId);
+      if (!latest || !taskBelongsToTab(latest) || terminal.has(latest.state) || latest.state === 'paused'
+        || Number(latest.goalRevision || 0) !== expected.goalRevision
+        || Number(latest.round || 0) !== expected.round
+        || String(latest.phase || 'work') !== expected.phase) {
+        navigating = false;
+        return;
+      }
+      let ticket = null;
+      try { ticket = JSON.parse(sessionStorage.getItem(NAV)); } catch {}
+      if (!ticket || ticket.task !== expected.taskId || ticket.path !== expected.targetPath
+        || (ticketHref && ticket.href !== ticketHref)) {
+        navigating = false;
+        return;
+      }
+      if (new URL(targetHref, location.origin).pathname === location.pathname) {
+        sessionStorage.removeItem(NAV);
+        navigating = false;
+        return;
+      }
+      try {
+        if (replace) location.replace(targetHref);
+        else location.assign(targetHref);
+      } catch (error) {
+        navigating = false;
+        if (task) {
+          state(task, 'waiting', '页面切换失败：' + error.message + '；已保留任务等待下一次受控恢复。');
+          save();
+        }
+      }
+    }).catch(error => {
+      navigating = false;
+      if (task && !terminal.has(task.state) && task.state !== 'paused') {
+        state(task, 'waiting', '宿主页面保护暂时不可用：' + error.message);
+        save();
+      }
+      schedule(LOCAL_NAVIGATION_COOLDOWN_MS);
+    }).finally(() => {
+      navigationRequestPending = false;
+    });
+    return false;
   }
   function hasUnsavedComposerInput() {
     const candidates = [...document.querySelectorAll('#prompt-textarea, textarea[data-id="root"], textarea[placeholder*="Message" i], div[contenteditable="true"]')];
@@ -685,6 +911,15 @@
         ? message.result
         : { ok:false, discarded:false, reason:String(message.error || 'host-unavailable').slice(0, 160) };
       settleHostMemoryRequest(requestId, result);
+      return;
+    }
+    if (message.type === HOST_NAVIGATION_GRANTED_TYPE || message.type === HOST_NAVIGATION_DENIED_TYPE) {
+      if (!hostNavigationPending.has(requestId)) return;
+      settleHostNavigationRequest(requestId, {
+        granted:message.type === HOST_NAVIGATION_GRANTED_TYPE && message.granted === true,
+        reason:message.reason || message.error,
+        retryAfterMs:message.retryAfterMs,
+      });
       return;
     }
     if (!hostRecoveryPending.has(requestId)) return;
@@ -2353,39 +2588,41 @@
     }
     let previous = null;
     try { previous = JSON.parse(sessionStorage.getItem(NAV)); } catch {}
-    const sameTicket = Boolean(previous?.direct && previous?.task === task?.id
+    const sameTicket = Boolean(previous?.direct && previous?.task === (task?.id || current)
       && previous?.path === targetPath && previous?.href === targetHref);
     if (!sameTicket) {
       const now = Date.now();
       sessionStorage.setItem(NAV, JSON.stringify({
-        path: targetPath,
-        href: targetHref,
-        at: now,
-        task: task?.id || current,
-        attempts: 1,
-        assigned: true,
-        direct: true,
-        resume: true,
+        path:targetPath,
+        href:targetHref,
+        at:now,
+        task:task?.id || current,
+        attempts:1,
+        assigned:true,
+        direct:true,
+        purpose:'dispatch',
+        phase:String(task?.phase || 'work'),
+        round:Number(task?.round || 0),
+        goalRevision:Number(task?.goalRevision || 0),
+        resume:true,
       }));
       if (task) {
         if (parsed && !parsed.synthetic) recordConversationURL(task, targetHref);
-        task.updatedAt = Date.now();
+        task.updatedAt = now;
         save();
       }
-      log(task, `正在按已记录的会话链接恢复：${targetHref}`);
-      navigating = true;
-      if (perform) {
-        try { location.assign(targetHref); } catch (error) {
-          navigating = false;
-          if (task) state(task, 'blocked', `会话链接打开失败：${error.message}`);
-        }
-      }
-    } else {
-      // The browser may still be hydrating after the first direct navigation.
-      // Keep the ticket, but never assign the same URL again.
-      navigating = true;
+      log(task, '正在按已记录的会话链接恢复：' + targetHref);
     }
-    return false;
+    if (!perform) {
+      navigating = false;
+      return false;
+    }
+    return beginGuardedNavigation(targetHref, task, {
+      replace:true,
+      ticketPath:targetPath,
+      ticketHref:targetHref,
+      reason:'route-switch',
+    });
   }
 
   function recoverThroughFreshDocument(task) {
@@ -2399,27 +2636,32 @@
     task.state = 'waiting';
     task.updatedAt = Date.now();
     sessionStorage.setItem(NAV, JSON.stringify({
-      path: root.pathname,
-      href: root.href,
-      at: Date.now(),
-      task: task.id,
-      attempts: nextAttempt,
-      assigned: true,
-      direct: true,
-      recovery: true,
-      documentRecovery: true,
-      resume: true,
+      path:root.pathname,
+      href:root.href,
+      at:Date.now(),
+      task:task.id,
+      attempts:nextAttempt,
+      assigned:true,
+      direct:true,
+      purpose:'recovery',
+      phase:String(task.phase || 'work'),
+      round:Number(task.round || 0),
+      goalRevision:Number(task.goalRevision || 0),
+      recovery:true,
+      documentRecovery:true,
+      resume:true,
     }));
     log(task, 'ChatGPT 页面持续卡住；正在通过一次新的文档交接恢复原任务，保留会话、发送标识和附件，不会重复派发。');
     sameRouteWaitUntil = 0;
     sameRouteWaitSince = 0;
-    navigating = true;
-    try { location.replace(ticket.recoveryURL); } catch (error) {
-      navigating = false;
-      state(task, 'waiting', `新的文档恢复加载失败：${error.message}；已保留任务等待下一次页面恢复。`);
-      save();
-    }
-    return false;
+    return beginGuardedNavigation(ticket.recoveryURL, task, {
+      replace:true,
+      force:true,
+      recovery:true,
+      ticketPath:root.pathname,
+      ticketHref:root.href,
+      reason:'document-recovery',
+    });
   }
 
   function recoverStalledRoute(target, task) {
@@ -2454,6 +2696,10 @@
       attempts: nextAttempt,
       assigned: true,
       direct: true,
+      purpose: 'recovery',
+      phase: String(task?.phase || 'work'),
+      round: Number(task?.round || 0),
+      goalRevision: Number(task?.goalRevision || 0),
       recovery: true,
       resume: true,
     }));
@@ -2464,15 +2710,14 @@
     sameRouteWaitUntil = 0;
     sameRouteWaitSince = 0;
     navigating = true;
-    try { location.replace(href); } catch (error) {
-      navigating = false;
-      if (task) {
-        task.rendererRecoveryExhausted = true;
-        state(task, 'waiting', `页面恢复加载失败：${error.message}；已停止重复刷新，保留当前任务等待。`);
-        save();
-      }
-    }
-    return false;
+    return beginGuardedNavigation(href, task, {
+      replace:true,
+      force:true,
+      recovery:true,
+      ticketPath:target.pathname,
+      ticketHref:href,
+      reason:'route-recovery',
+    });
   }
 
   function stopAmbiguousSend(task) {
@@ -3146,16 +3391,7 @@
       : '已恢复取消的任务，继续监控取消前的 ChatGPT 会话。');
     return true;
   }
-  function validNavigationTicket(ticket) {
-    const task = data.tasks.find(item => item.id === ticket?.task);
-    if (!taskBelongsToTab(task) || terminal.has(task.state) || task.state === 'paused') return false;
-    const ticketURL = canonicalConversationURL(ticket?.href);
-    if (ticketURL) return canonicalConversationURL(task.url) === ticketURL;
-    // A send starts at `/` before ChatGPT creates its real /c/<id> URL. The
-    // wildcard ticket is valid only while that exact send is still marked
-    // attempted; it must not resurrect an older round after the task moved on.
-    return ticket?.path === '*' && Boolean(task.attempted || task.state === 'sending');
-  }
+NaN
   function resumeCancelledTask(task) {
     if (!restoreCancelledTask(task)) return Promise.resolve(false);
     data.autoResume = true;
@@ -3691,7 +3927,7 @@
     };
     paint();
   }
-  window[INSTANCE]={active:true,version:VERSION,async shutdown(){stopMemoryMonitor();cancelHostMemoryRequests();stopWorkspaceHeartbeat('shutdown');suspendRunnerForPagehide();globalApprovalController?.abort();clearTimeout(globalApprovalTimer);globalApprovalTimer=null;clearTimeout(popupDismissTimer);popupDismissTimer=null;clearTimeout(automaticRecoveryTimer);automaticRecoveryTimer=null;releaseTransientUIResources({force:true});readTransientUIState=()=>({hasDraft:false,hasFiles:false});releaseTransientUIResources=()=>false;lifecycleController?.abort();this.active=false;document.querySelectorAll(`#${ROOT}`).forEach(node=>node.remove());document.querySelectorAll('#fabushi-auto-confirm-style').forEach(node=>node.remove());if(document.getElementById(BOOTSTRAP_MARKER)===bootstrap)bootstrap.remove();await releaseWorkspace();}};
+  window[INSTANCE]={active:true,version:VERSION,async shutdown(){stopMemoryMonitor();cancelHostMemoryRequests();cancelHostNavigationRequests();stopWorkspaceHeartbeat('shutdown');suspendRunnerForPagehide();globalApprovalController?.abort();clearTimeout(globalApprovalTimer);globalApprovalTimer=null;clearTimeout(popupDismissTimer);popupDismissTimer=null;clearTimeout(automaticRecoveryTimer);automaticRecoveryTimer=null;releaseTransientUIResources({force:true});readTransientUIState=()=>({hasDraft:false,hasFiles:false});releaseTransientUIResources=()=>false;lifecycleController?.abort();this.active=false;document.querySelectorAll(`#${ROOT}`).forEach(node=>node.remove());document.querySelectorAll('#fabushi-auto-confirm-style').forEach(node=>node.remove());if(document.getElementById(BOOTSTRAP_MARKER)===bootstrap)bootstrap.remove();await releaseWorkspace();}};
   window.FabushiUserscript=Object.freeze({pluginId:'chatgpt-auto-confirm',getServer:()=> 'browser-local',call:async(tool,args={})=>{
     if(['status','diagnose','queue_status','chat_status'].includes(tool))return{version:VERSION,running,tasks:tabTasks(),measurements,tabWorkspace:true,tabId,memory:{...memorySnapshot,pressure:memoryPressure,lastAction:memoryLastAction}};
     if(tool==='memory_status')return{...memorySnapshot,pressure:memoryPressure,lastAction:memoryLastAction,hostCapability:HOST_MEMORY_CAPABILITY};
@@ -3721,13 +3957,13 @@
   let ticket;try{ticket=JSON.parse(sessionStorage.getItem(NAV));}catch{}
   const ticketFresh = ticket && ticket.resume && Date.now()-ticket.at < NAV_TICKET_TTL_MS;
   const ticketUsable = ticketFresh && validNavigationTicket(ticket);
-  if(recoveredTaskId && data.autoResume !== false){
-    current=recoveredTaskId; lastSwitch=Date.now(); autoStart(recoveredTaskId);
-  } else if(ticketUsable){
-    // Resume the scheduler and let its finite navigation state machine inspect
-    // the ticket. Startup must never perform an unconditional location.assign,
-    // otherwise every document load can immediately trigger another refresh.
+  if(ticketUsable && data.autoResume !== false){
+    // An exact, phase/round-bound navigation ticket is stronger than a
+    // generic legacy-recovery hint. This keeps a completed Work document on
+    // the fresh queued review dispatch after a multi-task switch.
     current=ticket.task; lastSwitch=Date.now(); autoStart(ticket.task);
+  } else if(recoveredTaskId && data.autoResume !== false){
+    current=recoveredTaskId; lastSwitch=Date.now(); autoStart(recoveredTaskId);
   } else {
     sessionStorage.removeItem(NAV);
     if (data.autoResume !== false) {
@@ -3748,5 +3984,15 @@
     syncRemoteControl();
   });
   listen(window, 'pagehide',()=>{stopMemoryMonitor();writeWorkspaceHeartbeat('pagehide');if(!navigating)suspendRunnerForPagehide();releaseWorkspace();});
-  listen(window, 'pageshow',event=>{if(event.persisted)location.reload();else scheduleMemoryMonitor(1000);});
+  listen(window, 'pageshow',event=>{
+    if(event.persisted){
+      // A BFCache restore is already a live document. Avoid turning every
+      // tab switch into another full reload; let the bounded scheduler recheck
+      // the current route instead.
+      navigating=false;
+      sameRouteWaitUntil=Date.now()+1000;
+      sameRouteWaitSince=Date.now();
+      schedule(1000);
+    } else scheduleMemoryMonitor(1000);
+  });
 })();
