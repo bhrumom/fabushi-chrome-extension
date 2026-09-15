@@ -19,7 +19,7 @@ test("Fabushi Chrome platform includes the product shell, browser bridge, and in
   const manifest = JSON.parse(await source("manifest.json"));
   assert.equal(manifest.manifest_version, 3);
   assert.equal(manifest.name, "Fabushi");
-  assert.equal(manifest.version, "0.6.7");
+  assert.equal(manifest.version, "0.6.8");
   assert.equal(manifest.action.default_popup, "app.html");
   assert.equal(manifest.background.service_worker, "service-worker.js");
   for (const permission of ["debugger", "nativeMessaging", "downloads", "tabs", "tabGroups", "webNavigation", "scripting", "userScripts", "storage", "alarms"]) assert.ok(manifest.permissions.includes(permission), permission);
@@ -66,6 +66,7 @@ test("Chrome UI delegates account/product work to desktop Host and exposes safe 
   assert.match(app, /feature\.marketplace\.browse/);
   assert.match(app, /desktop\.settings\.open/);
   assert.match(app, /fabushi\.userscript\.install/);
+  assert.match(app, /import \{[\s\S]*?marketplaceItemId,/);
   assert.match(app, /marketplaceInstallAction/);
   assert.match(app, /fetchPublicMarketplace/);
   assert.match(app, /Chrome discovery is authoritative at the live Marketplace endpoint/);

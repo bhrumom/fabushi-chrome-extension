@@ -1,5 +1,6 @@
 import {
   compareMarketplaceVersions as compareVersions,
+  marketplaceItemId,
   marketplaceInstallAction,
   marketplaceInstalledVersion,
   marketplaceInstallContract,
