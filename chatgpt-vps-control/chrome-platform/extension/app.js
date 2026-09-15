@@ -37,6 +37,7 @@ const state = {
   marketplace: [],
   marketplaceUpdate: { checkedAt: 0, updates: [], error: "" },
   marketplaceAutoRefreshTimer: null,
+  marketplaceRequestId: 0,
   userscriptsLoaded: false,
   // Standalone Chrome has no desktop package list; an empty list is a valid
   // loaded state. A later Native Messaging connection replaces it with the
@@ -968,25 +969,36 @@ async function installMarketplaceItem(item, button) {
 }
 
 async function refreshMarketplace(query = "") {
-  if (!state.desktopConnected) {
-    // Discovery remains available without Native Messaging. Only metadata is
-    // fetched here; executable code is still either bundled or installed by
-    // the verified Host path below.
-    try {
-      state.marketplace = await fetchPublicMarketplace(query);
-    } catch {
-      state.marketplace = [];
-    }
+  const requestId = ++state.marketplaceRequestId;
+  // Chrome discovery is authoritative at the live Marketplace endpoint. A
+  // connected desktop Host may be older than the extension and must not make
+  // a published userscript update look like 2.9.28 is still current.
+  try {
+    const liveItems = await fetchPublicMarketplace(query);
+    if (requestId !== state.marketplaceRequestId) return;
+    state.marketplace = liveItems;
     if (shouldShowBundledFallback(query)) {
       const builtins = await bundledMarketplaceItems();
+      if (requestId !== state.marketplaceRequestId) return;
       for (const builtin of builtins) {
         const index = state.marketplace.findIndex((item) => itemPluginId(item) === builtin.pluginId);
         if (index < 0) state.marketplace.unshift(builtin);
         else if (compareVersions(itemVersion(builtin), itemVersion(state.marketplace[index])) > 0) state.marketplace[index] = builtin;
       }
     }
-    renderCards($("#marketplace-list"), state.marketplace, "没有找到可独立安装的 Chrome 项目");
+    renderCards($("#marketplace-list"), state.marketplace, state.desktopConnected ? "没有找到兼容 Chrome 的项目" : "没有找到可独立安装的 Chrome 项目");
     setMarketplaceUpdateStatus(marketplaceCatalogStatus(query));
+    return;
+  } catch {
+    // A transient live-catalog failure falls back to the connected Host. The
+    // Host can still install verified artifacts, but never outranks live data.
+  }
+
+  if (!state.desktopConnected) {
+    if (requestId !== state.marketplaceRequestId) return;
+    state.marketplace = [];
+    renderCards($("#marketplace-list"), state.marketplace, "没有找到可独立安装的 Chrome 项目");
+    setMarketplaceUpdateStatus({ ...state.marketplaceUpdate, checkedAt: Date.now(), error: "线上 Marketplace 暂时不可用。", reason: "catalog" });
     return;
   }
   try {
@@ -998,9 +1010,11 @@ async function refreshMarketplace(query = "") {
       // extension usable while the desktop app is being upgraded.
       result = await desktopRequest("feature.marketplace.browse", { query: query.trim() || undefined, platform: "web" });
     }
+    if (requestId !== state.marketplaceRequestId) return;
     state.marketplace = marketplaceItems(result);
     if (shouldShowBundledFallback(query)) {
       const builtins = await bundledMarketplaceItems();
+      if (requestId !== state.marketplaceRequestId) return;
       for (const builtin of builtins) {
         const index = state.marketplace.findIndex((item) => itemPluginId(item) === builtin.pluginId);
         if (index < 0) state.marketplace.unshift(builtin);

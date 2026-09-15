@@ -68,6 +68,9 @@ test("Chrome UI delegates account/product work to desktop Host and exposes safe 
   assert.match(app, /fabushi\.userscript\.install/);
   assert.match(app, /marketplaceInstallAction/);
   assert.match(app, /fetchPublicMarketplace/);
+  assert.match(app, /Chrome discovery is authoritative at the live Marketplace endpoint/);
+  assert.match(app, /const liveItems = await fetchPublicMarketplace\(query\)/);
+  assert.match(app, /marketplaceRequestId/);
   assert.match(app, /function fetchVerifiedUserscript/);
   assert.match(app, /raw\.githubusercontent\.com/);
   assert.match(app, /crypto\.subtle\.digest/);
