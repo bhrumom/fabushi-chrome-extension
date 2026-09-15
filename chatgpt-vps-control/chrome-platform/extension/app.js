@@ -37,6 +37,14 @@ const state = {
   marketplace: [],
   marketplaceUpdate: { checkedAt: 0, updates: [], error: "" },
   marketplaceAutoRefreshTimer: null,
+<<<<<<< HEAD
+  userscriptsLoaded: false,
+  // Standalone Chrome has no desktop package list; an empty list is a valid
+  // loaded state. A later Native Messaging connection replaces it with the
+  // Host-owned installed package list.
+  installedLoaded: true,
+=======
+>>>>>>> origin/main
   browser: { connected: false, tabs: [] },
 };
 
@@ -483,7 +491,13 @@ function updateStatusCopy(status) {
 }
 
 function setMarketplaceUpdateStatus(status = {}) {
+<<<<<<< HEAD
+  const localUpdates = state.userscriptsLoaded && state.installedLoaded
+    ? localMarketplaceUpdateCandidates()
+    : [];
+=======
   const localUpdates = localMarketplaceUpdateCandidates();
+>>>>>>> origin/main
   const remoteUpdates = Array.isArray(status.updates) ? status.updates : [];
   const updates = localUpdates.length ? localUpdates : remoteUpdates;
   state.marketplaceUpdate = {
@@ -500,6 +514,21 @@ function setMarketplaceUpdateStatus(status = {}) {
   copy.textContent = updateStatusCopy(state.marketplaceUpdate);
 }
 
+<<<<<<< HEAD
+function marketplaceCatalogStatus(query = "") {
+  const queryActive = Boolean(String(query || "").trim());
+  const ready = state.userscriptsLoaded && state.installedLoaded;
+  return {
+    ...state.marketplaceUpdate,
+    checkedAt: ready && !queryActive ? Date.now() : state.marketplaceUpdate.checkedAt,
+    updates: ready && !queryActive ? localMarketplaceUpdateCandidates() : state.marketplaceUpdate.updates,
+    error: "",
+    reason: "catalog",
+  };
+}
+
+=======
+>>>>>>> origin/main
 async function refreshMarketplaceUpdateStatus({ check = false } = {}) {
   const type = check ? "fabushi.marketplace.update.check" : "fabushi.marketplace.update.status";
   try {
@@ -745,10 +774,21 @@ async function refreshUserscripts() {
   try {
     const result = await runtimeMessage({ type: "fabushi.userscript.list" });
     state.userscripts = result?.ok && Array.isArray(result.scripts) ? result.scripts : [];
+    state.userscriptsLoaded = true;
     renderUserScripts();
     if (state.view === "marketplace") {
       renderCards($("#marketplace-list"), state.marketplace, "没有找到兼容 Chrome 的项目");
+<<<<<<< HEAD
+      setMarketplaceUpdateStatus({
+        ...state.marketplaceUpdate,
+        checkedAt: state.installedLoaded ? Date.now() : state.marketplaceUpdate.checkedAt,
+        updates: state.installedLoaded ? localMarketplaceUpdateCandidates() : state.marketplaceUpdate.updates,
+        error: state.installedLoaded ? "" : state.marketplaceUpdate.error,
+        reason: "local-state",
+      });
+=======
       setMarketplaceUpdateStatus(state.marketplaceUpdate);
+>>>>>>> origin/main
     }
   } catch (error) {
     showBanner(`油猴脚本列表读取失败：${error.message}`, "error");
@@ -961,7 +1001,11 @@ async function refreshMarketplace(query = "") {
       }
     }
     renderCards($("#marketplace-list"), state.marketplace, "没有找到可独立安装的 Chrome 项目");
+<<<<<<< HEAD
+    setMarketplaceUpdateStatus(marketplaceCatalogStatus(query));
+=======
     setMarketplaceUpdateStatus({ checkedAt: Date.now(), updates: localMarketplaceUpdateCandidates(), reason: "catalog" });
+>>>>>>> origin/main
     return;
   }
   try {
@@ -984,7 +1028,11 @@ async function refreshMarketplace(query = "") {
       }
     }
     renderCards($("#marketplace-list"), state.marketplace, "没有找到兼容 Chrome 的项目");
+<<<<<<< HEAD
+    setMarketplaceUpdateStatus(marketplaceCatalogStatus(query));
+=======
     setMarketplaceUpdateStatus({ checkedAt: Date.now(), updates: localMarketplaceUpdateCandidates(), reason: "catalog" });
+>>>>>>> origin/main
   } catch (error) {
     showBanner(error.message, "error");
     setMarketplaceUpdateStatus({ ...state.marketplaceUpdate, checkedAt: Date.now(), error: error.message, reason: "catalog" });
@@ -995,15 +1043,23 @@ async function refreshInstalled() {
   await refreshUserscripts();
   if (!state.desktopConnected) {
     state.installed = [];
+    state.installedLoaded = true;
     renderCards($("#miniapp-list"), [], "桌面小程序属于可选增强；下方油猴脚本可独立运行");
-    if (state.view === "marketplace") renderCards($("#marketplace-list"), state.marketplace, "没有找到兼容 Chrome 的项目");
+    if (state.view === "marketplace") {
+      renderCards($("#marketplace-list"), state.marketplace, "没有找到兼容 Chrome 的项目");
+      setMarketplaceUpdateStatus({ ...state.marketplaceUpdate, checkedAt: Date.now(), updates: localMarketplaceUpdateCandidates(), error: "", reason: "local-state" });
+    }
     return;
   }
   try {
     const result = await desktopRequest("feature.plugin.listInstalled");
     state.installed = Array.isArray(result) ? result : Array.isArray(result?.plugins) ? result.plugins : Array.isArray(result?.items) ? result.items : [];
+    state.installedLoaded = true;
     renderCards($("#miniapp-list"), state.installed, "还没有已安装的小程序");
-    if (state.view === "marketplace") renderCards($("#marketplace-list"), state.marketplace, "没有找到兼容 Chrome 的项目");
+    if (state.view === "marketplace") {
+      renderCards($("#marketplace-list"), state.marketplace, "没有找到兼容 Chrome 的项目");
+      setMarketplaceUpdateStatus({ ...state.marketplaceUpdate, checkedAt: Date.now(), updates: localMarketplaceUpdateCandidates(), error: "", reason: "local-state" });
+    }
     $("#miniapp-empty").hidden = state.installed.length > 0;
   } catch (error) {
     showBanner(error.message, "error");
