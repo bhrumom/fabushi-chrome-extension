@@ -1,5 +1,6 @@
 const REQUEST_SOURCE = "fabushi-userscript";
 const RESPONSE_SOURCE = "fabushi-extension";
+const NAVIGATION_PLUGIN_ID = "chatgpt-auto-confirm";
 
 function postResponse(requestId, ok, payload) {
   window.postMessage({
@@ -64,6 +65,15 @@ function navigationPayload(payload) {
   };
 }
 
+function navigationCancelPayload(payload) {
+  const value = payload && typeof payload === "object" && !Array.isArray(payload) ? payload : {};
+  return {
+    capability: String(value.capability || "").slice(0, 64),
+    leaseId: String(value.leaseId || "").slice(0, 128),
+    reason: String(value.reason || "stale-ticket").slice(0, 80),
+  };
+}
+
 function postMemoryResponse(requestId, response) {
   const ok = response?.ok === true;
   window.postMessage({
@@ -82,13 +92,28 @@ window.addEventListener("message", (event) => {
     chrome.runtime.sendMessage({
       type: "fabushi.userscript.navigation.request",
       requestId: String(data.requestId),
-      scriptId: String(data.scriptId || "").slice(0, 160),
-      pluginId: String(data.pluginId || "").slice(0, 64),
+      // v2.9.24-v2.9.30 omitted these envelope fields even though their
+      // redacted payload identified the navigation capability. The content
+      // bridge is bundled specifically for the canonical auto-confirm script,
+      // so normalize the missing legacy envelope instead of feeding the host
+      // an invalid request that repeats every 30 seconds forever.
+      scriptId: String(data.scriptId || NAVIGATION_PLUGIN_ID).slice(0, 160),
+      pluginId: String(data.pluginId || NAVIGATION_PLUGIN_ID).slice(0, 64),
       payload: navigationPayload(data.payload),
     }, (response) => {
       const runtimeError = chrome.runtime.lastError;
       postNavigationResponse(data.requestId, runtimeError ? { ok:false, error:runtimeError.message } : response);
     });
+    return;
+  }
+  if (data.type === "navigation-guard.cancel") {
+    chrome.runtime.sendMessage({
+      type: "fabushi.userscript.navigation.cancel",
+      requestId: String(data.requestId),
+      scriptId: String(data.scriptId || NAVIGATION_PLUGIN_ID).slice(0, 160),
+      pluginId: String(data.pluginId || NAVIGATION_PLUGIN_ID).slice(0, 64),
+      payload: navigationCancelPayload(data.payload),
+    }).catch(() => {});
     return;
   }
   if (data.type === "recovery-capability.request") {

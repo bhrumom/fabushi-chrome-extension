@@ -182,7 +182,6 @@ async function requestNavigationGuard(message, sender) {
 
     const leaseId = "fabushi-navigation-lease-" + crypto.randomUUID();
     record.tabId = tabId;
-    record.lastGrantedAt = now;
     record.updatedAt = now;
     record.inFlight = {
       leaseId,
@@ -195,7 +194,6 @@ async function requestNavigationGuard(message, sender) {
       at:now,
       recovery:request.recovery,
     };
-    if (!forced) record.recent.push(now);
     state.tabs[key] = record;
     const entries = Object.entries(state.tabs)
       .filter(([, value]) => value && now - Number(value.updatedAt || 0) < NAVIGATION_WINDOW_MS * 2)
@@ -214,6 +212,30 @@ async function requestNavigationGuard(message, sender) {
   });
 }
 
+async function cancelNavigationGuard(message, sender) {
+  return serial(async () => {
+    const { tabId } = senderTab(sender);
+    if (safeText(message?.pluginId, 64) !== PLUGIN_ID) throw new Error("导航保护插件身份无效。");
+    const payload = message?.payload && typeof message.payload === "object" && !Array.isArray(message.payload)
+      ? message.payload
+      : {};
+    if (safeText(payload.capability, 64) !== CAPABILITY) throw new Error("未声明受支持的导航保护能力。");
+    const leaseId = safeText(payload.leaseId, 128);
+    if (!leaseId) throw new Error("导航保护取消请求缺少 lease。");
+    const state = await readState();
+    const key = String(tabId);
+    const record = pruneRecord(state.tabs[key] || emptyRecord(tabId, Date.now()), Date.now());
+    if (record.inFlight?.leaseId === leaseId) {
+      record.inFlight = null;
+      record.updatedAt = Date.now();
+      state.tabs[key] = record;
+      await writeState(state);
+      return { cancelled:true, capability:CAPABILITY, leaseId };
+    }
+    return { cancelled:false, capability:CAPABILITY, leaseId };
+  });
+}
+
 async function noteTabUpdate(tabId, changeInfo, tab) {
   return serial(async () => {
     const state = await readState();
@@ -225,9 +247,23 @@ async function noteTabUpdate(tabId, changeInfo, tab) {
     if (isCrashTab(tab) || /^chrome-error:\/\//i.test(String(changeInfo?.url || ""))) {
       next.inFlight = null;
       next.cooldownUntil = Math.max(Number(next.cooldownUntil || 0), now + NAVIGATION_BREAK_MS);
-    } else if (changeInfo?.status === "complete") {
-      next.lastCommittedAt = now;
-      next.inFlight = null;
+    } else {
+      const currentURL = chatGPTURL(changeInfo?.url || tab?.url || tab?.pendingUrl, {
+        allowRecoveryHash:next.inFlight?.recovery === true,
+      });
+      if (next.inFlight && currentURL === next.inFlight.targetURL) {
+        // A grant is only a lease. Account for cooldown/burst limits after
+        // Chrome confirms that the exact leased target route was committed.
+        // If the userscript rejects a stale generation/ticket, its explicit
+        // cancel (or the TTL) clears the lease without creating a phantom
+        // 30-second cooldown.
+        next.lastCommittedAt = now;
+        next.lastGrantedAt = now;
+        if (!next.inFlight.recovery) next.recent.push(now);
+        next.inFlight = null;
+      } else if (changeInfo?.status === "complete" && !next.inFlight) {
+        next.lastCommittedAt = Math.max(Number(next.lastCommittedAt || 0), now);
+      }
     }
     next.updatedAt = now;
     state.tabs[key] = next;
@@ -245,8 +281,13 @@ async function removeTabState(tabId) {
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (!message || typeof message !== "object") return false;
-  if (message.type !== "fabushi.userscript.navigation.request") return false;
-  requestNavigationGuard(message, sender)
+  const handler = message.type === "fabushi.userscript.navigation.request"
+    ? requestNavigationGuard
+    : message.type === "fabushi.userscript.navigation.cancel"
+      ? cancelNavigationGuard
+      : null;
+  if (!handler) return false;
+  handler(message, sender)
     .then(result => sendResponse({ ok:true, ...result }))
     .catch(error => sendResponse({ ok:false, error:error?.message || String(error), ...deny("invalid-request") }));
   return true;

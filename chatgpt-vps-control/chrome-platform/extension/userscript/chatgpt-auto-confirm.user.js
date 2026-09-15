@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ChatGPT 自动确认 · Fabushi
 // @namespace    https://fabushi.ombhrum.com/userscripts/chatgpt-auto-confirm
-// @version      2.9.30
+// @version      2.9.31
 // @description  独立单标签任务工作台：目标编排、单次任务、附件粘贴预览、授权识别、实时消息、内存感知与可中断调度。
 // @match        https://chatgpt.com/*
 // @match        https://chat.openai.com/*
@@ -14,7 +14,7 @@
   'use strict';
   if (window.top !== window.self) return;
   const INSTANCE = '__FABUSHI_AUTO_CONFIRM_INSTANCE__';
-  const VERSION = '2.9.30';
+  const VERSION = '2.9.31';
   const BOOTSTRAP_MARKER = 'fabushi-auto-confirm-bootstrap-v1';
   const previousInstance = window[INSTANCE];
   if (previousInstance?.version === VERSION && previousInstance?.active) return;
@@ -129,6 +129,7 @@
   // the script is used without Fabushi.
   const HOST_NAVIGATION_CAPABILITY = 'tab-navigation-guard';
   const HOST_NAVIGATION_REQUEST_TYPE = 'navigation-guard.request';
+  const HOST_NAVIGATION_CANCEL_TYPE = 'navigation-guard.cancel';
   const HOST_NAVIGATION_GRANTED_TYPE = 'navigation-guard.granted';
   const HOST_NAVIGATION_DENIED_TYPE = 'navigation-guard.denied';
   const HOST_NAVIGATION_RESPONSE_TTL_MS = 5000;
@@ -540,7 +541,7 @@
       : [];
     return { lastAt:Number(stored?.lastAt || 0), recent };
   }
-  function rememberNavigationGrant(now = Date.now()) {
+  function rememberNavigationCommit(now = Date.now()) {
     const state = readNavigationGuardState(now);
     state.recent.push(now);
     localStorage.setItem(navigationGuardStorageKey(), JSON.stringify({
@@ -568,19 +569,33 @@
     if (!pending) return;
     hostNavigationPending.delete(requestId);
     const granted = result?.granted === true;
-    if (granted) rememberNavigationGrant();
     pending.resolve({
       granted,
+      leaseId:String(result?.leaseId || '').slice(0, 128),
       reason:String(result?.reason || (granted ? 'granted' : 'denied')).slice(0, 120),
       retryAfterMs:Math.max(0, Math.min(LOCAL_NAVIGATION_BREAK_MS, Number(result?.retryAfterMs) || 0)),
       fallback:result?.fallback === true,
     });
   }
+  function cancelHostNavigationLease(leaseId, reason = 'stale-ticket') {
+    const lease = String(leaseId || '').slice(0, 128);
+    if (!lease || typeof window.postMessage !== 'function') return false;
+    try {
+      window.postMessage({
+        source:'fabushi-userscript',
+        type:HOST_NAVIGATION_CANCEL_TYPE,
+        requestId:'fabushi-navigation-cancel-' + id(),
+        scriptId:HOST_MEMORY_PLUGIN_ID,
+        pluginId:HOST_MEMORY_PLUGIN_ID,
+        payload:{ capability:HOST_NAVIGATION_CAPABILITY, leaseId:lease, reason:String(reason || '').slice(0, 80) },
+      }, '*');
+      return true;
+    } catch { return false; }
+  }
   function requestHostNavigationPermit(targetHref, task, { force = false, recovery = false, reason = 'route-switch' } = {}) {
     const local = localNavigationDecision({ force });
     if (!local.granted) return Promise.resolve(local);
     if (force || typeof window.postMessage !== 'function') {
-      rememberNavigationGrant();
       return Promise.resolve({ granted:true, fallback:true, reason:force ? 'forced' : 'standalone' });
     }
     const requestId = 'fabushi-navigation-' + id();
@@ -604,6 +619,8 @@
           source:'fabushi-userscript',
           type:HOST_NAVIGATION_REQUEST_TYPE,
           requestId,
+          scriptId:HOST_MEMORY_PLUGIN_ID,
+          pluginId:HOST_MEMORY_PLUGIN_ID,
           payload,
         }, '*');
       } catch {
@@ -709,6 +726,7 @@
         || Number(latest.goalRevision || 0) !== expected.goalRevision
         || Number(latest.round || 0) !== expected.round
         || String(latest.phase || 'work') !== expected.phase) {
+        cancelHostNavigationLease(result.leaseId, 'stale-task-generation');
         navigating = false;
         return;
       }
@@ -716,16 +734,24 @@
       try { ticket = JSON.parse(sessionStorage.getItem(NAV)); } catch {}
       if (!ticket || ticket.task !== expected.taskId || ticket.path !== expected.targetPath
         || (ticketHref && ticket.href !== ticketHref)) {
+        cancelHostNavigationLease(result.leaseId, 'stale-navigation-ticket');
         navigating = false;
         return;
       }
       latest.navigationGuardRetryAt = 0;
       if (new URL(targetHref, location.origin).pathname === location.pathname) {
+        cancelHostNavigationLease(result.leaseId, 'same-route');
         sessionStorage.removeItem(NAV);
         navigating = false;
         return;
       }
       try {
+        // A permit is only a short-lived opportunity, not a completed
+        // navigation. Consume the standalone/local budget at the final commit
+        // point; the MV3 host independently records the exact target URL from
+        // tabs.onUpdated. Stale grants above are cancelled and consume no
+        // cooldown, preventing a repeated 30-second permit livelock.
+        rememberNavigationCommit();
         if (replace) location.replace(targetHref);
         else location.assign(targetHref);
       } catch (error) {
@@ -928,6 +954,7 @@
       if (!hostNavigationPending.has(requestId)) return;
       settleHostNavigationRequest(requestId, {
         granted:message.type === HOST_NAVIGATION_GRANTED_TYPE && message.granted === true,
+        leaseId:message.leaseId,
         reason:message.reason || message.error,
         retryAfterMs:message.retryAfterMs,
       });
