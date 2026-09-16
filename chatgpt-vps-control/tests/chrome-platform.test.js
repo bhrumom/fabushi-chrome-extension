@@ -19,7 +19,7 @@ test("Fabushi Chrome platform includes the product shell, browser bridge, and in
   const manifest = JSON.parse(await source("manifest.json"));
   assert.equal(manifest.manifest_version, 3);
   assert.equal(manifest.name, "Fabushi");
-  assert.equal(manifest.version, "0.6.10");
+  assert.equal(manifest.version, "0.6.11");
   assert.equal(manifest.action.default_popup, "app.html");
   assert.equal(manifest.background.service_worker, "service-worker.js");
   for (const permission of ["debugger", "nativeMessaging", "downloads", "tabs", "tabGroups", "webNavigation", "scripting", "userScripts", "storage", "alarms"]) assert.ok(manifest.permissions.includes(permission), permission);
@@ -42,7 +42,12 @@ test("Fabushi Chrome platform includes the product shell, browser bridge, and in
   await source("userscript-navigation-guard.js");
   await source("userscript-content.js");
   await source("userscript.css");
-  await source("userscript/chatgpt-auto-confirm.user.js");
+  const userscript = await source("userscript/chatgpt-auto-confirm.user.js");
+  assert.match(userscript, /^\/\/ @version\s+2\.9\.35$/m);
+  assert.match(userscript, /hasResponseCompletionAction/);
+  assert.match(userscript, /评价回复|Rate response/);
+  assert.match(userscript, /share|分享/);
+  assert.doesNotMatch(userscript, /STALLED_REFRESH_LIMIT/);
   await source("marketplace/chatgpt-task-queue.user.js");
 });
 

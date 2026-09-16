@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ChatGPT 自动确认 · Fabushi
 // @namespace    https://fabushi.ombhrum.com/userscripts/chatgpt-auto-confirm
-// @version      2.9.32
+// @version      2.9.35
 // @description  独立单标签任务工作台：目标编排、单次任务、附件粘贴预览、授权识别、实时消息、内存感知与可中断调度。
 // @match        https://chatgpt.com/*
 // @match        https://chat.openai.com/*
@@ -14,7 +14,7 @@
   'use strict';
   if (window.top !== window.self) return;
   const INSTANCE = '__FABUSHI_AUTO_CONFIRM_INSTANCE__';
-  const VERSION = '2.9.32';
+  const VERSION = '2.9.35';
   const BOOTSTRAP_MARKER = 'fabushi-auto-confirm-bootstrap-v1';
   const previousInstance = window[INSTANCE];
   if (previousInstance?.version === VERSION && previousInstance?.active) return;
@@ -71,11 +71,13 @@
   const FINAL_REPLY_STABILITY_MS = 4000;
   // A bound conversation can stop changing while ChatGPT is waiting for an
   // authorization card, a renderer update, or an image/tool result. Reload
-  // the same route after a bounded idle period so the page can rediscover
-  // those controls without creating a second Work/planner send.
+  // the same route after each three-minute idle period so the page can
+  // rediscover those controls without creating a second Work/planner send.
   const STALLED_REFRESH_MS = 3 * 60 * 1000;
-  const STALLED_REFRESH_LIMIT = 2;
-  const STALLED_REFRESH_COOLDOWN_MS = 15000;
+  // Keep the persisted reload interval aligned with the stall detector. A
+  // page that remains unchanged can therefore be retried forever, but never
+  // more than once per three minutes.
+  const STALLED_REFRESH_COOLDOWN_MS = STALLED_REFRESH_MS;
   const MAX_REVIEW_REPAIR_ATTEMPTS = 2;
   const ROUTE_HYDRATION_TIMEOUT_MS = 30000;
   const ROUTE_RECOVERY_LIMIT = 2;
@@ -2352,14 +2354,14 @@
       task.stalledRefreshExhausted = false;
     }
     const attempts = Number(task.stalledRefreshAttempts || 0);
-    if (task.stalledRefreshExhausted || attempts >= STALLED_REFRESH_LIMIT) {
-      if (!task.stalledRefreshExhausted) {
-        task.stalledRefreshExhausted = true;
-        task.state = 'waiting';
-        log(task, `当前会话连续无变化，已达到 ${STALLED_REFRESH_LIMIT} 次刷新上限；保留会话、发送标识和附件等待人工恢复。`);
-        save();
-      }
-      return false;
+    // Older builds persisted this terminal-looking flag after the second
+    // reload. It is now only a migration marker and must never block a later
+    // three-minute retry cycle.
+    if (task.stalledRefreshExhausted) {
+      task.stalledRefreshExhausted = false;
+      task.state = 'waiting';
+      log(task, '已解除历史停滞刷新次数上限；会话若继续无变化，将每 3 分钟自动刷新，直到任务完成或被暂停。');
+      save();
     }
     if (now - Number(task.stalledRefreshAt || 0) < STALLED_REFRESH_COOLDOWN_MS) return false;
     const nextAttempt = attempts + 1;
@@ -2368,15 +2370,14 @@
     task.stalledRefreshExhausted = false;
     task.state = 'waiting';
     observations.delete(task.id);
-    log(task, `当前会话连续 3 分钟没有可见变化；正在刷新当前页面（第 ${nextAttempt}/${STALLED_REFRESH_LIMIT} 次），保留会话、发送标识、附件和当前阶段，不会重复发送。`);
+    log(task, `当前会话连续 3 分钟没有可见变化；正在刷新当前页面（第 ${nextAttempt} 次，后续仍无变化时每 3 分钟继续刷新），保留会话、发送标识、附件和当前阶段，不会重复发送。`);
     save();
     if (!perform) return true;
     navigating = true;
     try { location.reload(); } catch (error) {
       navigating = false;
-      task.stalledRefreshExhausted = true;
       task.state = 'waiting';
-      log(task, `停滞会话刷新失败：${error.message}；已保留当前任务等待恢复。`);
+      log(task, `停滞会话刷新失败：${error.message}；已保留当前任务，3 分钟后继续尝试。`);
       save();
       return false;
     }
@@ -2439,8 +2440,10 @@
         item?.getAttribute?.('data-label'),
       ]).filter(Boolean).join(' ')).toLowerCase();
       if (/(?:copy|复制)(?:\s+(?:response|turn|message|content))?|复制(?:回复|回答|内容|消息)?/.test(value)) return 'copy';
+      if (/(?:share|分享|共享)(?:[\s_-]*(?:response|reply|turn|message|conversation|link|回答|回复|消息|对话|链接))?/.test(value)) return 'share';
       if (/(?:good[\s_-]*response|positive[\s_-]*feedback|upvote|like|thumbs?[\s_-]*up|赞|喜欢|好的回答|回复优秀)/.test(value)) return 'like';
       if (/(?:bad[\s_-]*response|negative[\s_-]*feedback|downvote|dislike|thumbs?[\s_-]*down|踩|不喜欢|不好的回答|回复不佳)/.test(value)) return 'dislike';
+      if (/(?:rate|feedback)(?:[\s_-]*(?:this\s+)?(?:response|reply|answer|message|conversation))?|评价(?:回复|回答|消息)?|评分/.test(value)) return 'feedback';
       if (/(?:regenerate|retry|try[\s_-]*again|重新生成|重试|再次生成)/.test(value)) return 'regenerate';
       if (/(?:more(?:\s+actions?)?|更多操作|更多|显示更多)/.test(value)) return 'more';
       if (/(?:branch|continue in (?:a )?new (?:chat|task)|新建(?:聊天)?分支|在新.*聊天.*分支|从这里.*(?:继续|分支))/.test(value)) return 'branch';
@@ -2458,6 +2461,10 @@
       const nearestTurn = node.closest?.(responseSelector);
       return !nearestTurn || nearestTurn === article || nearestTurn === assistant;
     };
+    const hasResponseCompletionAction = kinds => kinds.has('share')
+      || kinds.has('feedback')
+      || kinds.has('like')
+      || kinds.has('dislike');
     const scopes = [];
     const addScope = scope => { if (scope && !scopes.includes(scope)) scopes.push(scope); };
     addScope(article);
@@ -2472,7 +2479,7 @@
       const found = controlsIn(scope).filter(item => controlsBelongToResponse(item.node));
       if (!found.length) continue;
       const kinds = new Set(found.map(item => item.kind));
-      const complete = kinds.has('copy') && (kinds.has('like') || kinds.has('dislike'));
+      const complete = kinds.has('copy') && hasResponseCompletionAction(kinds);
       if (!responseControls.length || complete) responseControls = found;
       if (complete) break;
     }
@@ -2506,7 +2513,7 @@
     }
     const responseActions = new Set(responseControls.map(item => item.kind));
     const responseActionsComplete = responseActions.has('copy')
-      && (responseActions.has('like') || responseActions.has('dislike'));
+      && hasResponseCompletionAction(responseActions);
     // ChatGPT has shipped renderer variants where the static marker lives on
     // the markdown node (or on a turn wrapper without a message/turn id).
     // The node is already scoped to the latest assistant turn, so requiring a
@@ -2533,9 +2540,10 @@
       user: text(user),
       text: content,
       // ChatGPT may leave a stale streaming attribute on the turn wrapper
-      // after it has mounted the completed reply toolbar. The copy + feedback
-      // pair is the strongest user-visible completion signal, so it wins over
-      // that stale attribute; an explicit static marker remains the fallback.
+      // after it has mounted the completed reply toolbar. The copy + share,
+      // rating, or feedback pair is the strongest user-visible completion
+      // signal, so it wins over that stale attribute; an explicit static
+      // marker remains the fallback.
       final: finalByActions || finalByMarker,
       owned,
       responseActions: [...responseActions],
