@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ChatGPT 自动确认 · Fabushi
 // @namespace    https://fabushi.ombhrum.com/userscripts/chatgpt-auto-confirm
-// @version      2.9.31
+// @version      2.9.32
 // @description  独立单标签任务工作台：目标编排、单次任务、附件粘贴预览、授权识别、实时消息、内存感知与可中断调度。
 // @match        https://chatgpt.com/*
 // @match        https://chat.openai.com/*
@@ -14,7 +14,7 @@
   'use strict';
   if (window.top !== window.self) return;
   const INSTANCE = '__FABUSHI_AUTO_CONFIRM_INSTANCE__';
-  const VERSION = '2.9.31';
+  const VERSION = '2.9.32';
   const BOOTSTRAP_MARKER = 'fabushi-auto-confirm-bootstrap-v1';
   const previousInstance = window[INSTANCE];
   if (previousInstance?.version === VERSION && previousInstance?.active) return;
@@ -69,6 +69,14 @@
   // observed in loading/generating state. Keep a short grace period, then
   // finish even when the prior scan was not itself a clear observation.
   const FINAL_REPLY_STABILITY_MS = 4000;
+  // A bound conversation can stop changing while ChatGPT is waiting for an
+  // authorization card, a renderer update, or an image/tool result. Reload
+  // the same route after a bounded idle period so the page can rediscover
+  // those controls without creating a second Work/planner send.
+  const STALLED_REFRESH_MS = 3 * 60 * 1000;
+  const STALLED_REFRESH_LIMIT = 2;
+  const STALLED_REFRESH_COOLDOWN_MS = 15000;
+  const MAX_REVIEW_REPAIR_ATTEMPTS = 2;
   const ROUTE_HYDRATION_TIMEOUT_MS = 30000;
   const ROUTE_RECOVERY_LIMIT = 2;
   const CONNECTION_INTERRUPTED_REFRESH_LIMIT = 2;
@@ -2314,6 +2322,66 @@
     }
     return true;
   }
+  function stalledProgressSignature(sample) {
+    return JSON.stringify({
+      text:String(sample?.text || '').slice(-6000),
+      final:Boolean(sample?.final),
+      responseActions:[...(sample?.responseActions || [])].sort(),
+      responseActionsComplete:Boolean(sample?.responseActionsComplete),
+      explicitFinal:Boolean(sample?.explicitFinal),
+      stop:Boolean(sample?.stop),
+      cards:Number(sample?.cards || 0),
+      loading:Boolean(sample?.loading),
+      blocker:String(sample?.blocker || ''),
+      rateLimit:String(sample?.rateLimit || ''),
+      owned:Boolean(sample?.owned),
+      routeOwned:Boolean(sample?.routeOwned),
+      foreignTaskId:String(sample?.foreignTaskId || ''),
+    });
+  }
+  function refreshStalledConversation(task, perform = true, now = Date.now()) {
+    if (!task || task.state === 'paused' || task.state === 'cancelled' || task.attempted) return false;
+    const conversationURL = currentConversationURL() || canonicalConversationURL(task.url);
+    const taskURL = canonicalConversationURL(task.url);
+    if (!conversationURL || !taskURL || conversationURL !== taskURL) return false;
+    if (Number(task.cooldownUntil || 0) > now) return false;
+    if (task.stalledRefreshURL !== conversationURL) {
+      task.stalledRefreshURL = conversationURL;
+      task.stalledRefreshAttempts = 0;
+      task.stalledRefreshAt = 0;
+      task.stalledRefreshExhausted = false;
+    }
+    const attempts = Number(task.stalledRefreshAttempts || 0);
+    if (task.stalledRefreshExhausted || attempts >= STALLED_REFRESH_LIMIT) {
+      if (!task.stalledRefreshExhausted) {
+        task.stalledRefreshExhausted = true;
+        task.state = 'waiting';
+        log(task, `当前会话连续无变化，已达到 ${STALLED_REFRESH_LIMIT} 次刷新上限；保留会话、发送标识和附件等待人工恢复。`);
+        save();
+      }
+      return false;
+    }
+    if (now - Number(task.stalledRefreshAt || 0) < STALLED_REFRESH_COOLDOWN_MS) return false;
+    const nextAttempt = attempts + 1;
+    task.stalledRefreshAttempts = nextAttempt;
+    task.stalledRefreshAt = now;
+    task.stalledRefreshExhausted = false;
+    task.state = 'waiting';
+    observations.delete(task.id);
+    log(task, `当前会话连续 3 分钟没有可见变化；正在刷新当前页面（第 ${nextAttempt}/${STALLED_REFRESH_LIMIT} 次），保留会话、发送标识、附件和当前阶段，不会重复发送。`);
+    save();
+    if (!perform) return true;
+    navigating = true;
+    try { location.reload(); } catch (error) {
+      navigating = false;
+      task.stalledRefreshExhausted = true;
+      task.state = 'waiting';
+      log(task, `停滞会话刷新失败：${error.message}；已保留当前任务等待恢复。`);
+      save();
+      return false;
+    }
+    return true;
+  }
   function dispatchCooldownRemaining(now = Date.now()) {
     return Math.max(0, Number(data.lastDispatchAt || 0) + MIN_SEND_INTERVAL_MS - now);
   }
@@ -2360,15 +2428,19 @@
     // marker as a second independent signal.
     const responseControlSelector = 'button,a,[role="button"]';
     const responseControlKind = node => {
-      const value = normalize([
-        node?.textContent,
-        node?.getAttribute?.('aria-label'),
-        node?.getAttribute?.('title'),
-        node?.getAttribute?.('data-testid'),
-      ].filter(Boolean).join(' ')).toLowerCase();
+      const semanticNodes = [node, ...(node?.querySelectorAll?.('svg,[data-icon],[data-testid]') || [])];
+      const value = normalize(semanticNodes.flatMap(item => [
+        item?.textContent,
+        item?.getAttribute?.('aria-label'),
+        item?.getAttribute?.('title'),
+        item?.getAttribute?.('data-testid'),
+        item?.getAttribute?.('data-tooltip'),
+        item?.getAttribute?.('data-tooltip-content'),
+        item?.getAttribute?.('data-label'),
+      ]).filter(Boolean).join(' ')).toLowerCase();
       if (/(?:copy|复制)(?:\s+(?:response|turn|message|content))?|复制(?:回复|回答|内容|消息)?/.test(value)) return 'copy';
-      if (/(?:good[\s_-]*response|like|thumbs?[\s_-]*up|赞|喜欢|好的回答|回复优秀)/.test(value)) return 'like';
-      if (/(?:bad[\s_-]*response|dislike|thumbs?[\s_-]*down|踩|不喜欢|不好的回答|回复不佳)/.test(value)) return 'dislike';
+      if (/(?:good[\s_-]*response|positive[\s_-]*feedback|upvote|like|thumbs?[\s_-]*up|赞|喜欢|好的回答|回复优秀)/.test(value)) return 'like';
+      if (/(?:bad[\s_-]*response|negative[\s_-]*feedback|downvote|dislike|thumbs?[\s_-]*down|踩|不喜欢|不好的回答|回复不佳)/.test(value)) return 'dislike';
       if (/(?:regenerate|retry|try[\s_-]*again|重新生成|重试|再次生成)/.test(value)) return 'regenerate';
       if (/(?:more(?:\s+actions?)?|更多操作|更多|显示更多)/.test(value)) return 'more';
       if (/(?:branch|continue in (?:a )?new (?:chat|task)|新建(?:聊天)?分支|在新.*聊天.*分支|从这里.*(?:继续|分支))/.test(value)) return 'branch';
@@ -2400,8 +2472,7 @@
       const found = controlsIn(scope).filter(item => controlsBelongToResponse(item.node));
       if (!found.length) continue;
       const kinds = new Set(found.map(item => item.kind));
-      const complete = kinds.has('copy') && (kinds.has('like') || kinds.has('dislike'))
-        && (kinds.has('dislike') || kinds.has('regenerate') || kinds.has('more') || kinds.has('branch'));
+      const complete = kinds.has('copy') && (kinds.has('like') || kinds.has('dislike'));
       if (!responseControls.length || complete) responseControls = found;
       if (complete) break;
     }
@@ -2435,8 +2506,7 @@
     }
     const responseActions = new Set(responseControls.map(item => item.kind));
     const responseActionsComplete = responseActions.has('copy')
-      && (responseActions.has('like') || responseActions.has('dislike'))
-      && (responseActions.has('dislike') || responseActions.has('regenerate') || responseActions.has('more') || responseActions.has('branch'));
+      && (responseActions.has('like') || responseActions.has('dislike'));
     // ChatGPT has shipped renderer variants where the static marker lives on
     // the markdown node (or on a turn wrapper without a message/turn id).
     // The node is already scoped to the latest assistant turn, so requiring a
@@ -2457,10 +2527,16 @@
     );
     const streaming = article?.querySelector('[data-is-streaming="true"],[aria-busy="true"]')
       || [assistant, article].find(node => node?.getAttribute?.('data-is-streaming') === 'true' || node?.getAttribute?.('aria-busy') === 'true');
+    const finalByActions = Boolean(content && responseActionsComplete && !stopButton());
+    const finalByMarker = Boolean(content && explicitFinal && !streaming);
     return {
       user: text(user),
       text: content,
-      final: Boolean(content && (responseActionsComplete || explicitFinal) && !streaming),
+      // ChatGPT may leave a stale streaming attribute on the turn wrapper
+      // after it has mounted the completed reply toolbar. The copy + feedback
+      // pair is the strongest user-visible completion signal, so it wins over
+      // that stale attribute; an explicit static marker remains the fallback.
+      final: finalByActions || finalByMarker,
       owned,
       responseActions: [...responseActions],
       responseActionsComplete,
@@ -3195,12 +3271,106 @@
     }
     return;
   }
-  function parseReview(value, task) {
-    const source = String(value).trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '');
-    const report = JSON.parse(source);
-    if (report.taskId !== task.id || report.round !== task.round || !['complete','next'].includes(report.status) || typeof report.summary !== 'string' || !report.summary.trim()) throw new Error('验收模板不匹配本任务与轮次');
-    if (report.status === 'next' && (typeof report.next !== 'string' || !report.next.trim())) throw new Error('验收缺少下一轮安排');
+  function reviewParseError(message, cause = null) {
+    const error = new Error(message);
+    error.code = 'invalid-review-json';
+    if (cause) error.cause = cause;
+    return error;
+  }
+  function reviewFieldValue(source, key) {
+    const escapedKey = key.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const field = new RegExp(`(?:["']\\s*)?${escapedKey}(?:\\s*["'])?\\s*:`, 'i').exec(source);
+    if (!field) return null;
+    let index = field.index + field[0].length;
+    while (/\s/.test(source[index] || '')) index += 1;
+    if (index >= source.length) return null;
+    const quote = source[index];
+    if (quote !== '"' && quote !== "'") {
+      const start = index;
+      while (index < source.length && !',}\n\r'.includes(source[index])) index += 1;
+      const value = source.slice(start, index).trim();
+      return value ? { value, quoted:false } : null;
+    }
+    index += 1;
+    let value = '';
+    const escapes = { '"':'"', "'":"'", '\\':'\\', '/':'/', b:'\\b', f:'\\f', n:'\\n', r:'\\r', t:'\\t' };
+    for (; index < source.length; index += 1) {
+      const character = source[index];
+      if (character === '\\') {
+        const escaped = source[index + 1];
+        if (!escaped) return null;
+        if (escaped === 'u') {
+          const hex = source.slice(index + 2, index + 6);
+          if (!/^[0-9a-f]{4}$/i.test(hex)) return null;
+          value += String.fromCharCode(parseInt(hex, 16));
+          index += 5;
+        } else {
+          value += escapes[escaped] ?? escaped;
+          index += 1;
+        }
+        continue;
+      }
+      if (character === quote) {
+        let next = index + 1;
+        while (/\s/.test(source[next] || '')) next += 1;
+        // A quote followed by a field delimiter closes the value. A quote
+        // followed by another key quote is also a boundary for tolerant
+        // reports that omit the comma between fields. Otherwise it is kept
+        // as an unescaped quote inside the human-written summary/next text.
+        if (next >= source.length || ',}]'.includes(source[next]) || source[next] === '"' || source[next] === "'") {
+          return { value, quoted:true };
+        }
+      }
+      value += character;
+    }
+    return null;
+  }
+  function recoverReviewReport(source) {
+    const taskId = reviewFieldValue(source, 'taskId')?.value?.trim();
+    const roundRaw = reviewFieldValue(source, 'round')?.value?.trim();
+    const status = reviewFieldValue(source, 'status')?.value?.trim();
+    const summary = reviewFieldValue(source, 'summary')?.value?.trim();
+    const round = roundRaw && /^\d+$/.test(roundRaw) ? Number(roundRaw) : NaN;
+    if (!taskId || !Number.isInteger(round) || !status || !summary) return null;
+    const report = { taskId, round, status, summary };
+    const next = reviewFieldValue(source, 'next')?.value?.trim();
+    if (next) report.next = next;
     return report;
+  }
+  function parseReview(value, task) {
+    const source = String(value).trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '').trim();
+    let report;
+    try {
+      report = JSON.parse(source);
+    } catch (error) {
+      report = recoverReviewReport(source);
+      if (!report) throw reviewParseError('验收回复 JSON 无法解析；插件将有限重开验收会话，不会重复执行 Work。', error);
+    }
+    if (!report || typeof report !== 'object' || Array.isArray(report)
+      || typeof report.taskId !== 'string' || !Number.isInteger(report.round)
+      || typeof report.status !== 'string' || !['complete','next'].includes(report.status)
+      || typeof report.summary !== 'string' || !report.summary.trim()) {
+      throw reviewParseError('验收回复缺少可验证的任务报告字段；插件将有限重开验收会话，不会重复执行 Work。');
+    }
+    if (report.taskId !== task.id || report.round !== task.round) throw new Error('验收模板不匹配本任务与轮次');
+    if (report.status === 'next' && (typeof report.next !== 'string' || !report.next.trim())) throw reviewParseError('验收回复缺少下一轮安排；插件将有限重开验收会话，不会重复执行 Work。');
+    return report;
+  }
+  function queueReviewRepair(task, reason = '验收回复格式无法解析') {
+    if (!task || task.phase !== 'review') return '';
+    const attempts = Number(task.reviewRepairAttempts || 0);
+    if (attempts >= MAX_REVIEW_REPAIR_ATTEMPTS) {
+      task.state = 'blocked';
+      log(task, `${reason}；已达到 ${MAX_REVIEW_REPAIR_ATTEMPTS} 次有限恢复上限。请检查验收会话后再恢复，已保留 Work 结果且不会重复执行。`);
+      save();
+      return 'blocked';
+    }
+    task.reviewRepairAttempts = attempts + 1;
+    clearDispatchIntent(task);
+    task.state = 'queued';
+    log(task, `${reason}；已保留 Work 结果并重新开启规划/验收会话（第 ${task.reviewRepairAttempts}/${MAX_REVIEW_REPAIR_ATTEMPTS} 次），不会重复执行 Work。`);
+    save();
+    return 'queued';
   }
   function finish(task, reply) {
     task.preview = '';
@@ -3231,10 +3401,11 @@
         save();
         return;
       }
-      task.result = reply.slice(0,24000); task.phase = 'review'; task.url = ''; task.token = ''; task.attempted = false; task.dispatchOriginURL = ''; task.dispatchStartedAt = 0; task.state = 'queued'; task.noFinalReplyAttempts = 0;
+      task.result = reply.slice(0,24000); task.reviewRepairAttempts = 0; task.phase = 'review'; task.url = ''; task.token = ''; task.attempted = false; task.dispatchOriginURL = ''; task.dispatchStartedAt = 0; task.state = 'queued'; task.noFinalReplyAttempts = 0;
       log(task, 'Work 自然回复已确认结束，插件正在新开规划/验收会话。');
     } else {
       const report = parseReview(reply, task);
+      task.reviewRepairAttempts = 0;
       if (Number(task.dispatchGoalRevision || 0) !== Number(task.goalRevision || 0)) {
         task.result = ''; task.next = ''; task.round++; task.phase = 'work'; task.url = ''; task.token = ''; task.attempted = false; task.dispatchOriginURL = ''; task.dispatchStartedAt = 0; task.state = 'queued'; task.noFinalReplyAttempts = 0;
         log(task, '验收期间任务目标已更新；已忽略旧验收结论，下一轮 Work 将按新目标开始。');
@@ -3293,10 +3464,28 @@
       foreignTaskId:routeOwned && !turn.owned ? (foreignTask?.id || '') : '',
       text:turn.text,
       final:turn.final,
+      responseActions:turn.responseActions,
+      responseActionsComplete:turn.responseActionsComplete,
+      explicitFinal:turn.explicitFinal,
       sentAt:task.sentAt,
     };
     const previous = observations.get(task.id);
     const now = Date.now();
+    const progressSignature = stalledProgressSignature(sample);
+    const progressUnchanged = previous?.progressSignature === progressSignature;
+    const progressSince = progressUnchanged && Number.isFinite(Number(previous.progressSince))
+      ? Number(previous.progressSince)
+      : now;
+    const stalledFor = progressUnchanged ? now - progressSince : 0;
+    const stallEligible = Boolean(
+      sample.routeOwned
+      && pageBelongsToTask
+      && !sample.final
+      && !sample.rateLimit
+      && !sample.blocker
+      && !task.attempted
+      && stalledFor >= STALLED_REFRESH_MS,
+    );
     const identityMismatchSince = sample.routeOwned && !sample.owned
       ? (previous?.identityMismatchSince || now)
       : 0;
@@ -3333,12 +3522,15 @@
       loading:Boolean(sample.loading),
       clear,
       identityMismatchSince,
+      progressSignature,
+      progressSince,
     });
     measurements.scans++; measurements.totalScanMs += performance.now() - begin;
     if (sample.owned && task.preview !== sample.text) {
       task.preview = sample.text.slice(-6000);
       paint(); // Live preview is transient; streaming does not write localStorage.
     }
+    if (stallEligible && refreshStalledConversation(task)) return;
     if (result.state === 'complete') { finish(task, sample.text); return; }
     if (result.state === 'cooldown') {
       restForRateLimit(task);
@@ -3483,7 +3675,11 @@
         }
       } else await inspect(task, signal);
     } catch (error) {
-      if (!signal.aborted && task && task.state !== 'paused' && task.state !== 'cancelled') state(task, 'blocked', error.message);
+      if (!signal.aborted && task && task.state !== 'paused' && task.state !== 'cancelled') {
+        const reviewRecovery = error.code === 'invalid-review-json' ? queueReviewRepair(task, error.message) : '';
+        if (reviewRecovery === 'queued') nextScheduleMs = 100;
+        else if (reviewRecovery !== 'blocked') state(task, 'blocked', error.message);
+      }
     } finally {
       busy = false;
       if (!signal.aborted) schedule(document.hidden ? Math.max(4000, nextScheduleMs) : nextScheduleMs);
