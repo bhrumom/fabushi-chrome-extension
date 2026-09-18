@@ -14,6 +14,21 @@ const SUPPORTED_GRANTS = new Set([
 
 const text = (value, limit = 512) => String(value ?? "").replace(/\0/g, "").trim().slice(0, limit);
 
+function normalizeUpdateUrl(value, directive) {
+  const candidate = text(value, 2048);
+  if (!candidate || candidate.toLowerCase() === "none") return null;
+  let url;
+  try {
+    url = new URL(candidate);
+  } catch {
+    throw new Error(`油猴脚本的 ${directive} 不是有效 URL。`);
+  }
+  if (url.protocol !== "https:" || url.username || url.password || url.port || url.hash) {
+    throw new Error(`油猴脚本的 ${directive} 必须使用不带凭据的 HTTPS URL。`);
+  }
+  return url.toString();
+}
+
 function byteLength(value) {
   return new TextEncoder().encode(String(value)).byteLength;
 }
@@ -49,6 +64,8 @@ function parseMetadata(source) {
     else if (key === "grant") metadata.grants.push(value || "none");
     else if (key === "run-at") metadata.runAt = value || "document-idle";
     else if (key === "noframes") metadata.noFrames = true;
+    else if (key === "updateurl") metadata.updateURL = value;
+    else if (key === "downloadurl") metadata.downloadURL = value;
     else if (["name", "namespace", "version", "description", "author", "icon"].includes(key)) {
       metadata[key] = value;
     }
@@ -58,6 +75,8 @@ function parseMetadata(source) {
   if (!metadata.namespace) metadata.namespace = "fabushi.local";
   if (!metadata.description) metadata.description = "Fabushi 用户脚本";
   if (!metadata.runAt) metadata.runAt = "document-idle";
+  if (metadata.updateURL !== undefined) metadata.updateURL = normalizeUpdateUrl(metadata.updateURL, "@updateURL");
+  if (metadata.downloadURL !== undefined) metadata.downloadURL = normalizeUpdateUrl(metadata.downloadURL, "@downloadURL");
   if (!metadata.matches.length && !metadata.includes.length) {
     throw new Error("油猴脚本至少需要一个 @match 或 @include。");
   }
@@ -86,7 +105,7 @@ export function normalizeUserScript(source, options = {}) {
   if (!normalized.trim()) throw new Error("油猴脚本内容为空。");
   if (byteLength(normalized) > MAX_SOURCE_BYTES) throw new Error("油猴脚本超过 2 MiB 大小限制。");
   const metadata = parseMetadata(normalized);
-  const forbiddenDirectives = ["require", "resource", "downloadurl", "updateurl", "connect"];
+  const forbiddenDirectives = ["require", "resource", "connect"];
   const header = normalized.match(/==UserScript==([\s\S]*?)==\/UserScript==/i)?.[1] || "";
   for (const directive of forbiddenDirectives) {
     if (new RegExp(`^\\s*//\\s*@${directive}\\b`, "im").test(header)) {
@@ -102,6 +121,12 @@ export function normalizeUserScript(source, options = {}) {
   for (const [pattern, label] of blockedCode) {
     if (pattern.test(normalized)) throw new Error(`Fabushi 用户脚本不允许 ${label}。`);
   }
+  const fallbackUpdateURL = options.updateURL === undefined
+    ? undefined
+    : normalizeUpdateUrl(options.updateURL, "@updateURL");
+  const fallbackDownloadURL = options.downloadURL === undefined
+    ? undefined
+    : normalizeUpdateUrl(options.downloadURL, "@downloadURL");
   return {
     id: scriptId(metadata, options.sourcePluginId),
     name: metadata.name,
@@ -115,10 +140,16 @@ export function normalizeUserScript(source, options = {}) {
     noFrames: metadata.noFrames === true,
     source: normalized,
     sourcePluginId: text(options.sourcePluginId, 160) || null,
-    sourcePluginVersion: text(options.sourcePluginVersion, 100) || null,
+    // The script metadata is authoritative. The Marketplace entry may lag
+    // behind the file served by the update URL and must never overwrite the
+    // script's own @version.
+    sourcePluginVersion: metadata.version,
     sourceRepository: text(options.sourceRepository, 512) || null,
     sourceRef: text(options.sourceRef, 64) || null,
     sourceArtifactSha256: text(options.sourceArtifactSha256, 64).toLocaleLowerCase() || null,
+    sourceURL: text(options.sourceURL, 2048) || null,
+    updateURL: metadata.updateURL !== undefined ? metadata.updateURL : fallbackUpdateURL || null,
+    downloadURL: metadata.downloadURL !== undefined ? metadata.downloadURL : fallbackDownloadURL || null,
     commands: Array.isArray(options.commands) ? options.commands.slice(0, 64).map((value) => text(value, 120)).filter(Boolean) : [],
     installedAt: Number(options.installedAt) || Date.now(),
     enabled: options.enabled !== false,

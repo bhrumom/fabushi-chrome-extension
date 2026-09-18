@@ -16,6 +16,7 @@ const labels = { chats: "聊天", miniapps: "小程序", marketplace: "Marketpla
 const BUNDLED_USERSCRIPT_PATH = "userscript/chatgpt-auto-confirm.user.js";
 const MARKETPLACE_API_ROOT = "https://api.ombhrum.com";
 const MARKETPLACE_USERSCRIPT_REPOSITORY = "https://github.com/bhrumom/fabushi-chatgpt-auto-confirm-userscript";
+const MARKETPLACE_USERSCRIPT_UPDATE_URL = "https://raw.githubusercontent.com/bhrumom/fabushi-chatgpt-auto-confirm-userscript/main/chatgpt-auto-confirm.user.js";
 const MARKETPLACE_USERSCRIPT_COMMIT = "c6cf4e3fce76c0e62ad2be4d409044d5b2486d0f";
 const MARKETPLACE_USERSCRIPT_SHA256 = "64af1493153cccc4c172b1d1092379e77ca8f662c30ab42e3ed5a610b5e391f5";
 const MARKETPLACE_USERSCRIPT_SIZE = 239555;
@@ -313,8 +314,10 @@ const BUILTIN_MARKETPLACE_ITEM = {
       entry: "chatgpt-auto-confirm.user.js",
     }],
     update: {
-      check: "marketplace-release",
-      comparison: "version-then-artifact-sha256",
+      check: "userscript-metadata",
+      comparison: "@version-at-updateURL",
+      updateURL: MARKETPLACE_USERSCRIPT_UPDATE_URL,
+      downloadURL: MARKETPLACE_USERSCRIPT_UPDATE_URL,
       allowDowngrade: false,
       rollback: "previous-active",
     },
@@ -366,8 +369,10 @@ const BUILTIN_MARKETPLACE_ITEM = {
         entry: "chatgpt-auto-confirm.user.js",
       }],
       update: {
-        check: "marketplace-release",
-        comparison: "version-then-artifact-sha256",
+        check: "userscript-metadata",
+        comparison: "@version-at-updateURL",
+        updateURL: MARKETPLACE_USERSCRIPT_UPDATE_URL,
+        downloadURL: MARKETPLACE_USERSCRIPT_UPDATE_URL,
         allowDowngrade: false,
         rollback: "previous-active",
       },
@@ -481,8 +486,12 @@ function localMarketplaceUpdateCandidates() {
 
 function updateStatusCopy(status) {
   const updates = Array.isArray(status?.updates) ? status.updates : [];
+  const applied = Array.isArray(status?.applied) ? status.applied : [];
   if (updates.length) {
     return `发现 ${updates.length} 个更新：${updates.map((item) => `${item.displayName || item.pluginId} ${item.installedVersion || "旧版本"} → ${item.latestVersion || "新版本"}`).join("、")}`;
+  }
+  if (applied.length) {
+    return `已自动更新 ${applied.length} 个脚本：${applied.map((item) => `${item.displayName || item.pluginId} ${item.installedVersion || "旧版本"} → ${item.latestVersion || "新版本"}`).join("、")}`;
   }
   if (status?.error) return "自动检查暂时失败，将在后台继续重试。";
   if (status?.checkedAt) return `已自动检查 · 暂无新版本（${new Date(status.checkedAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}）`;
@@ -498,6 +507,7 @@ function setMarketplaceUpdateStatus(status = {}) {
   state.marketplaceUpdate = {
     checkedAt: Number(status.checkedAt) || (localUpdates.length ? Date.now() : 0),
     updates,
+    applied: Array.isArray(status.applied) ? status.applied : state.marketplaceUpdate.applied || [],
     error: String(status.error || ""),
     reason: String(status.reason || ""),
   };
@@ -942,6 +952,9 @@ async function installMarketplaceItem(item, button) {
         sourceRepository: marketplaceInstallContract(item)?.source?.repository,
         sourceRef: marketplaceInstallContract(item)?.source?.sourceRef,
         sourceArtifactSha256: verifiedUserscriptArtifact?.sha256 || verifiedUserscriptArtifact?.artifactSha256,
+        sourceURL: verifiedUserscriptArtifact?.source?.url,
+        updateURL: marketplaceInstallContract(item)?.update?.updateURL || marketplaceInstallContract(item)?.updateURL || item?.updateURL,
+        downloadURL: marketplaceInstallContract(item)?.update?.downloadURL || marketplaceInstallContract(item)?.downloadURL || item?.downloadURL,
         commands,
       });
       if (!installed?.ok) throw new Error(installed?.error || "扩展安装油猴脚本失败。");
@@ -1222,6 +1235,7 @@ chrome.runtime.onMessage.addListener((message) => {
   if (message?.type === "fabushi.platform.event") handlePlatformEvent(message.event);
   if (message?.type === "fabushi.marketplace.updates" && message.status) {
     setMarketplaceUpdateStatus(message.status);
+    if (message.status.applied?.length) void refreshUserscripts();
     if (state.view === "marketplace") renderCards($("#marketplace-list"), state.marketplace, "没有找到兼容 Chrome 的项目");
   }
   if (message?.type === "fabushi.platform.connection") {

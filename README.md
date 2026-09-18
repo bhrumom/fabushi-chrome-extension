@@ -8,3 +8,7 @@ Source roots: chatgpt-vps-control/extension;chatgpt-vps-control/chrome-platform;
 Product builds, CI, Releases, and dependency boundaries are maintained here independently
 after the migration acceptance gates pass. Do not add credentials or source paths owned by
 another platform repository.
+
+Current browser release: `0.6.13`. The bundled ChatGPT userscript is `2.9.38` and declares
+stable Tampermonkey-style `@updateURL` / `@downloadURL` metadata. Marketplace remains the
+first-install/discovery surface; subsequent userscript releases are checked from that URL.
