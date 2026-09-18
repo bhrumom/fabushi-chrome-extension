@@ -34,7 +34,7 @@ function compareVersions(left, right) {
   return 0;
 }
 
-async function loadBundledRecord() {
+export async function loadBundledRecord() {
   const response = await fetch(`${chrome.runtime.getURL('userscript/chatgpt-auto-confirm.user.js')}?update=${Date.now()}`, { cache: 'no-store' });
   if (!response.ok) throw new Error('无法读取内置脚本');
   const source = await response.text();
@@ -47,7 +47,7 @@ async function loadBundledRecord() {
   return { ...record, sourcePluginVersion: record.version };
 }
 
-async function readRecords() {
+export async function readRecords() {
   const result = await chrome.storage.local.get([STORAGE_KEY, BUNDLED_STATE_KEY]);
   const records = Array.isArray(result?.[STORAGE_KEY]) ? result[STORAGE_KEY].filter((item) => item && typeof item === "object") : [];
   let changed = false;
@@ -258,14 +258,24 @@ async function runMatchingScripts(tabId, url) {
   return started;
 }
 
-async function installUserScript(message) {
+export async function installUserScript(message) {
+  const existingRecords = await readRecords();
+  const previous = existingRecords.find((item) => (message.sourcePluginId && item.sourcePluginId === message.sourcePluginId)
+    || (!message.sourcePluginId && item.id === message.id));
   const record = normalizeUserScript(message.source, {
     sourcePluginId: message.sourcePluginId,
     sourcePluginVersion: message.sourcePluginVersion,
+    sourceRepository: message.sourceRepository,
+    sourceRef: message.sourceRef,
+    sourceArtifactSha256: message.sourceArtifactSha256,
+    sourceURL: message.sourceURL,
+    updateURL: message.updateURL,
+    downloadURL: message.downloadURL,
     commands: message.commands,
-    enabled: message.enabled !== false,
+    installedAt: previous?.installedAt,
+    enabled: message.enabled === undefined ? previous?.enabled !== false : message.enabled !== false,
   });
-  const records = (await readRecords()).filter((item) => item.id !== record.id
+  const records = existingRecords.filter((item) => item.id !== record.id
     && (!record.sourcePluginId || item.sourcePluginId !== record.sourcePluginId));
   records.push(record);
   await registerUserScript(record);
@@ -342,7 +352,8 @@ async function requestTabMemoryCleanup(message, sender) {
   return { ok:true, discarded:true, reason:"discarded", tabId };
 }
 
-chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+if (typeof chrome !== "undefined" && chrome.runtime) {
+  chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (!message || typeof message !== "object") return false;
   if (message.type === "fabushi.userscript.list") {
     readRecords().then((records) => sendResponse({ ok: true, scripts: records.map(publicUserScript) }), (error) => sendResponse({ ok: false, error: String(error) }));
@@ -397,25 +408,28 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true;
   }
   return false;
-});
+  });
 
-chrome.runtime.onStartup.addListener(() => {
-  void (async () => {
-    const tabs = await chrome.tabs.query({});
-    const records = await readRecords();
-    await Promise.all(records.filter((record) => record.enabled !== false).map((record) => registerUserScript(record)));
-    await Promise.all(tabs.map((tab) => tab.id && tab.url ? runMatchingScripts(tab.id, tab.url) : null));
-  })().catch((error) => console.warn("[Fabushi] 用户脚本启动恢复失败", error));
-});
+  chrome.runtime.onStartup.addListener(() => {
+    void (async () => {
+      const tabs = await chrome.tabs.query({});
+      const records = await readRecords();
+      await Promise.all(records.filter((record) => record.enabled !== false).map((record) => registerUserScript(record)));
+      await Promise.all(tabs.map((tab) => tab.id && tab.url ? runMatchingScripts(tab.id, tab.url) : null));
+    })().catch((error) => console.warn("[Fabushi] 用户脚本启动恢复失败", error));
+  });
+}
 
-// Content-script handshakes can be lost while a service worker is being
-// restarted. The tab lifecycle is the second activation signal, so a fully
-// loaded matching page is still taken over without requiring a manual reload
-// or a click in the Fabushi panel.
-chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
-  if (changeInfo.status !== "complete" || !tab?.url) return;
-  void runMatchingScripts(tabId, tab.url).catch((error) => console.warn("[Fabushi] 页面自动接管失败", error));
-});
+if (typeof chrome !== "undefined" && chrome.tabs) {
+  // Content-script handshakes can be lost while a service worker is being
+  // restarted. The tab lifecycle is the second activation signal, so a fully
+  // loaded matching page is still taken over without requiring a manual reload
+  // or a click in the Fabushi panel.
+  chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
+    if (changeInfo.status !== "complete" || !tab?.url) return;
+    void runMatchingScripts(tabId, tab.url).catch((error) => console.warn("[Fabushi] 页面自动接管失败", error));
+  });
+}
 
 async function reconcileRegisteredScripts() {
   if (reconcilePromise) return reconcilePromise;
@@ -428,8 +442,10 @@ async function reconcileRegisteredScripts() {
   return reconcilePromise;
 }
 
-chrome.runtime.onInstalled.addListener(() => {
-  void reconcileRegisteredScripts().catch((error) => console.warn("[Fabushi] 用户脚本注册恢复失败", error));
-});
+if (typeof chrome !== "undefined" && chrome.runtime) {
+  chrome.runtime.onInstalled.addListener(() => {
+    void reconcileRegisteredScripts().catch((error) => console.warn("[Fabushi] 用户脚本注册恢复失败", error));
+  });
 
-void reconcileRegisteredScripts().catch((error) => console.warn("[Fabushi] 用户脚本注册初始化失败", error));
+  void reconcileRegisteredScripts().catch((error) => console.warn("[Fabushi] 用户脚本注册初始化失败", error));
+}

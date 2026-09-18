@@ -211,7 +211,13 @@ export function marketplaceInstallAction(item, installed, userscript) {
   if (!installed && !userscript) return "install";
   const available = marketplaceItemVersion(item);
   const current = marketplaceInstalledVersion(item, installed, userscript);
-  if (available && current && compareMarketplaceVersions(current, available) > 0) return "blocked";
+  if (available && current && compareMarketplaceVersions(current, available) > 0) {
+    // Userscript versions are authoritative in their own metadata/update URL.
+    // A stale Marketplace projection must not turn a successfully updated
+    // script into a fake downgrade/error state.
+    if (marketplaceItemKind(item) === "userscript") return "current";
+    return "blocked";
+  }
   if (!current || (available && compareMarketplaceVersions(current, available) < 0)) return "update";
   const expectedDigest = marketplaceExpectedDigest(item);
   const installedDigest = marketplaceInstalledDigest(installed, userscript);

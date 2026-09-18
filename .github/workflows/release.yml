@@ -1,0 +1,61 @@
+name: Chrome extension
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Validate manifest and JavaScript
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="$(node -p "require('./chatgpt-vps-control/chrome-platform/extension/manifest.json').version")"
+          test "$version" = "0.6.13"
+          while IFS= read -r -d '' file; do
+            node --check "$file"
+          done < <(find chatgpt-vps-control/chrome-platform/extension -type f -name '*.js' -print0)
+
+      - name: Validate release tag
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="$(node -p "require('./chatgpt-vps-control/chrome-platform/extension/manifest.json').version")"
+          test "${GITHUB_REF_NAME#v}" = "$version"
+
+  package:
+    if: startsWith(github.ref, 'refs/tags/')
+    needs: validate
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Package Chrome extension
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="$(node -p "require('./chatgpt-vps-control/chrome-platform/extension/manifest.json').version")"
+          mkdir -p dist
+          (cd chatgpt-vps-control/chrome-platform/extension && zip -qr "$GITHUB_WORKSPACE/dist/fabushi-chrome-$version.zip" .)
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: dist/fabushi-chrome-*.zip
