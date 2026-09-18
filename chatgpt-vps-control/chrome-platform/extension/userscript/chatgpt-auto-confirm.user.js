@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ChatGPT 自动确认 · Fabushi
 // @namespace    https://fabushi.ombhrum.com/userscripts/chatgpt-auto-confirm
-// @version      2.9.35
+// @version      2.9.37
 // @description  独立单标签任务工作台：目标编排、单次任务、附件粘贴预览、授权识别、实时消息、内存感知与可中断调度。
 // @match        https://chatgpt.com/*
 // @match        https://chat.openai.com/*
@@ -14,7 +14,7 @@
   'use strict';
   if (window.top !== window.self) return;
   const INSTANCE = '__FABUSHI_AUTO_CONFIRM_INSTANCE__';
-  const VERSION = '2.9.35';
+  const VERSION = '2.9.37';
   const BOOTSTRAP_MARKER = 'fabushi-auto-confirm-bootstrap-v1';
   const previousInstance = window[INSTANCE];
   if (previousInstance?.version === VERSION && previousInstance?.active) return;
@@ -78,6 +78,17 @@
   // page that remains unchanged can therefore be retried forever, but never
   // more than once per three minutes.
   const STALLED_REFRESH_COOLDOWN_MS = STALLED_REFRESH_MS;
+  // An ambiguous Send click gets the same three-minute recovery cadence.
+  // Prefer a current-round bound conversation first; only an unbound send
+  // may eventually be redispatched after several page recovery cycles.
+  const AMBIGUOUS_SEND_REFRESH_MS = STALLED_REFRESH_MS;
+  const AMBIGUOUS_SEND_REFRESH_LIMIT = NO_FINAL_REPLY_RETRY_LIMIT;
+  // A permanent page error must not create a hot loop of new conversations.
+  // The first blocked recovery is immediate; repeated failures remain queued
+  // and retry automatically with a short exponential delay, never as a
+  // terminal manual-action state.
+  const BLOCKED_AUTO_RETRY_BASE_MS = 15 * 1000;
+  const BLOCKED_AUTO_RETRY_MAX_MS = 3 * 60 * 1000;
   const MAX_REVIEW_REPAIR_ATTEMPTS = 2;
   const ROUTE_HYDRATION_TIMEOUT_MS = 30000;
   const ROUTE_RECOVERY_LIMIT = 2;
@@ -1161,11 +1172,7 @@
   function taskCanBeRecoveredByHost(task) {
     return Boolean(task && (
       AUTO_RECOVERABLE_STATE_NAMES.has(String(task.state || ''))
-      || (task.state === 'blocked' && (
-        (task.attempted && task.token)
-        || task.rendererRecoveryExhausted
-        || task.attachmentUploadPending
-      ))
+      || task.state === 'blocked'
     ));
   }
   function heartbeatTask() {
@@ -1712,6 +1719,12 @@
     save();
   }
   function state(task, value, message) {
+    if (value === 'blocked' && data.autoResume !== false) {
+      const reason = message || statusNames[value];
+      if (task.state !== 'blocked') { task.state = 'blocked'; log(task, reason); }
+      queueBlockedFreshRetry(task, reason);
+      return;
+    }
     if (task.state !== value) { task.state = value; log(task, message || statusNames[value]); }
   }
   function legacyNavigationFailureFor(task) {
@@ -2086,7 +2099,7 @@
     task.attachmentLastAttemptAt = 0;
     if (attachmentFailureRequiresUserAction(message)) {
       task.attachmentUploadRetryAt = 0;
-      state(task, 'blocked', `附件上传未确认，已停止发送纯文字目标。${message ? ` ${message}` : ''} 可点击重试；若文件已被浏览器清理，请重新选择文件。`);
+      state(task, 'blocked', `附件上传未确认，未发送纯文字目标。${message ? ` ${message}` : ''} 将自动新开会话并重试附件；若浏览器已清理文件内容，任务保持自动重试而不会降级为纯文字发送。`);
     } else {
       const attempt = Number(task.attachmentUploadRetryCount || 0) + 1;
       const retryMs = attachmentRetryDelayMs(attempt);
@@ -2778,8 +2791,7 @@
     clearTimeout(navigationTimer); navigationTimer = null; navigating = false;
     sessionStorage.removeItem(NAV);
     if (task) {
-      state(task, 'blocked', `${reason}；没有可用的真实会话链接，已停止等待，不会刷新或重复派发。`);
-      log(task, '请在任务中保留有效的 https://chatgpt.com/c/<会话ID> 链接后再恢复。');
+      state(task, 'blocked', `${reason}；没有可用的真实会话链接，将自动切换到新的 ChatGPT 会话重发。`);
     }
     return false;
   }
@@ -2944,29 +2956,71 @@
     });
   }
 
-  function stopAmbiguousSend(task) {
-    const adoptedURL = adoptUnboundAttemptedConversation(task);
-    if (adoptedURL) {
-      task.attempted = false;
-      task.dispatchOriginURL = '';
-      task.dispatchStartedAt = 0;
-      task.rendererRecoveryExhausted = false;
-      task.routeRecoveryAttempts = 0;
-      task.workspaceDocumentRecoveryAttempts = 0;
-      task.updatedAt = Date.now();
-      state(task, 'waiting', '已从当前唯一的新会话恢复本轮发送结果；沿用原发送标识和附件，开始检查最终回复，不会重复发送。');
-      save();
-      return true;
-    }
-    task.updatedAt = Date.now();
-    if (task.url && canonicalConversationURL(task.url)) {
-      task.attempted = false;
-      state(task, 'waiting', '已记录本轮会话链接；无法读取消息标识时仍按唯一链接继续监控，不会重复发送。');
-    } else {
-      state(task, 'blocked', '原消息发送结果超过 90 秒仍无法确认；当前页面链接未被绑定到本任务，已停止且保留派发标识，不会自动重发。请在 ChatGPT 中找到本轮会话后，把真实会话链接记录到任务再恢复。');
-    }
+  function resetAmbiguousSendRecovery(task) {
+  if (!task) return;
+  task.ambiguousSendRefreshAttempts = 0;
+  task.ambiguousSendRefreshAt = 0;
+}
+function stopAmbiguousSend(task, perform = true, now = Date.now()) {
+  const adoptedURL = adoptUnboundAttemptedConversation(task);
+  if (adoptedURL) {
+    task.attempted = false;
+    task.dispatchOriginURL = '';
+    task.dispatchStartedAt = 0;
+    task.recoveryConfirmationStartedAt = 0;
+    task.rendererRecoveryExhausted = false;
+    task.routeRecoveryAttempts = 0;
+    task.workspaceDocumentRecoveryAttempts = 0;
+    resetAmbiguousSendRecovery(task);
+    task.updatedAt = now;
+    state(task, 'waiting', '已从当前唯一的新会话恢复本轮发送结果；沿用原发送标识和附件，开始检查最终回复，不会重复发送。');
     save();
+    return true;
   }
+  task.updatedAt = now;
+  const boundURL = canonicalConversationURL(task.url);
+  if (boundURL) {
+    task.attempted = false;
+    task.dispatchOriginURL = '';
+    task.dispatchStartedAt = 0;
+    task.recoveryConfirmationStartedAt = 0;
+    task.rendererRecoveryExhausted = false;
+    task.routeRecoveryAttempts = 0;
+    task.workspaceDocumentRecoveryAttempts = 0;
+    resetAmbiguousSendRecovery(task);
+    task.state = 'waiting';
+    log(task, '原消息发送确认超过 90 秒；已找到本轮绑定会话，优先回到该会话检查是否已结束或已有最终回复，再按回复结果继续下一步，不会重复发送。');
+    save();
+    if (perform && currentConversationURL() !== boundURL) directNavigate(new URL(boundURL), task);
+    return true;
+  }
+  const attempts = Number(task.ambiguousSendRefreshAttempts || 0);
+  const lastRefreshAt = Number(task.ambiguousSendRefreshAt || 0);
+  if (lastRefreshAt && now - lastRefreshAt < AMBIGUOUS_SEND_REFRESH_MS) {
+    task.state = 'sending';
+    return false;
+  }
+  if (attempts >= AMBIGUOUS_SEND_REFRESH_LIMIT) {
+    resetAmbiguousSendRecovery(task);
+    return queueNoFinalReplyRetry(task, `原消息发送结果持续无法绑定本轮会话；已按每 3 分钟一次的间隔恢复 ${AMBIGUOUS_SEND_REFRESH_LIMIT} 次仍无法确认`);
+  }
+  const nextAttempt = attempts + 1;
+  task.ambiguousSendRefreshAttempts = nextAttempt;
+  task.ambiguousSendRefreshAt = now;
+  task.state = 'sending';
+  log(task, `原消息发送结果超过 90 秒仍无法确认，且尚无本轮绑定会话；正在刷新当前页面（第 ${nextAttempt}/${AMBIGUOUS_SEND_REFRESH_LIMIT} 次）。刷新后会重新判断当前页面和会话状态；若仍无法绑定，将每 3 分钟继续恢复，持续失败后自动新开会话原样重发。`);
+  save();
+  if (!perform) return true;
+  navigating = true;
+  try { location.reload(); } catch (error) {
+    navigating = false;
+    task.state = 'sending';
+    log(task, `发送确认恢复刷新失败：${error.message}；已保留原发送标识，3 分钟后继续尝试。`);
+    save();
+    return false;
+  }
+  return true;
+}
   function noFinalReplyBackoffMs(cycle) {
     const round = Math.max(1, Number(cycle || 1));
     return Math.min(NO_FINAL_REPLY_BACKOFF_BASE_MS * (2 ** Math.min(round - 1, 4)), NO_FINAL_REPLY_BACKOFF_MAX_MS);
@@ -2984,9 +3038,35 @@
     task.rendererRecoveryExhausted = false;
     task.routeRecoveryAttempts = 0;
     task.workspaceDocumentRecoveryAttempts = 0;
+    resetAmbiguousSendRecovery(task);
     resetAttachmentUploadState(task);
     observations.delete(task.id);
   }
+  function queueBlockedFreshRetry(task, reason = '任务进入需要处理状态') {
+    if (!task || ['done', 'cancelled'].includes(task.state)) return '';
+    const attempt = Number(task.blockedAutoRetryCount || 0) + 1;
+    const detail = String(reason || '任务进入需要处理状态').trim() || '任务进入需要处理状态';
+    const retryDelayMs = attempt <= 1 ? 0 : Math.min(
+      BLOCKED_AUTO_RETRY_BASE_MS * (2 ** Math.min(attempt - 2, 5)),
+      BLOCKED_AUTO_RETRY_MAX_MS,
+    );
+    task.blockedAutoRetryCount = attempt;
+    task.lastBlockedReason = detail.slice(0, 1000);
+    task.lastBlockedRecoveryAt = Date.now();
+    clearDispatchIntent(task);
+    task.noFinalReplyRecoveryUntil = 0;
+    task.cooldownUntil = retryDelayMs ? Date.now() + retryDelayMs : 0;
+    task.state = 'queued';
+    delete task.pausedState;
+    resetAmbiguousSendRecovery(task);
+    resetAttachmentUploadState(task);
+    observations.delete(task.id);
+    const cadence = retryDelayMs ? `，${Math.ceil(retryDelayMs / 1000)} 秒后自动重发` : '并立即自动重发';
+    log(task, `${detail}；已自动清理旧派发并切换到新的 ChatGPT 会话${cadence}（自动恢复第 ${attempt} 次），不会停在“需要处理”。`);
+    save();
+    return 'queued';
+  }
+
   function queueNoFinalReplyRetry(task, reason = '会话已结束但没有最终回复') {
     if (!task) return '';
     const attempts = Number(task.noFinalReplyAttempts || 0);
@@ -3226,6 +3306,7 @@
     task.routeRecoveryAttempts = 0;
     task.workspaceDocumentRecoveryAttempts = 0;
     task.recoveryConfirmationStartedAt = 0;
+    resetAmbiguousSendRecovery(task);
     task.sentAt = Date.now();
     // The send always starts from `/`. Keep the origin only as diagnostic
     // context; it is never promoted to the task's conversation identity.
@@ -3368,10 +3449,7 @@
     if (!task || task.phase !== 'review') return '';
     const attempts = Number(task.reviewRepairAttempts || 0);
     if (attempts >= MAX_REVIEW_REPAIR_ATTEMPTS) {
-      task.state = 'blocked';
-      log(task, `${reason}；已达到 ${MAX_REVIEW_REPAIR_ATTEMPTS} 次有限恢复上限。请检查验收会话后再恢复，已保留 Work 结果且不会重复执行。`);
-      save();
-      return 'blocked';
+      return queueBlockedFreshRetry(task, `${reason}；已达到 ${MAX_REVIEW_REPAIR_ATTEMPTS} 次当前会话修复上限`);
     }
     task.reviewRepairAttempts = attempts + 1;
     clearDispatchIntent(task);
@@ -3385,6 +3463,10 @@
     task.noFinalReplyAttempts = 0;
     task.noFinalReplyRecoveryCycles = 0;
     task.noFinalReplyRecoveryUntil = 0;
+    task.blockedAutoRetryCount = 0;
+    task.lastBlockedReason = '';
+    task.lastBlockedRecoveryAt = 0;
+    task.cooldownUntil = 0;
     task.sendPrepared = false;
     task.preparedPrompt = '';
     task.sendUiWaitSince = 0;
@@ -3394,6 +3476,7 @@
     task.rendererRecoveryExhausted = false;
     task.routeRecoveryAttempts = 0;
     task.workspaceDocumentRecoveryAttempts = 0;
+    resetAmbiguousSendRecovery(task);
     resetAttachmentUploadState(task);
     observations.delete(task.id);
     log(task, reply, 'assistant');
@@ -3821,6 +3904,7 @@ NaN
       task.rendererRecoveryExhausted = false;
       task.routeRecoveryAttempts = 0;
       task.workspaceDocumentRecoveryAttempts = 0;
+      resetAmbiguousSendRecovery(task);
       task.noFinalReplyRecoveryUntil = 0;
       delete task.pausedState;
       log(task, automatic
@@ -3867,9 +3951,9 @@ NaN
   }
   function recoverPersistedBlockedTasks() {
     if (data.autoResume === false) return '';
-    const task = tabTasks().find(item => item.state === 'blocked' && taskCanBeRecoveredByHost(item));
-    if (!task || !prepareTaskForRecovery(task, { automatic:true })) return '';
-    save();
+    const task = tabTasks().find(item => item.state === 'blocked');
+    if (!task) return '';
+    queueBlockedFreshRetry(task, '检测到历史“需要处理”任务');
     return task.id;
   }
   function resumeTask(task) {
