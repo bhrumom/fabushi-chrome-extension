@@ -1,12 +1,12 @@
 // ==UserScript==
 // @name         ChatGPT 自动确认 · Fabushi
 // @namespace    https://fabushi.ombhrum.com/userscripts/chatgpt-auto-confirm
-// @version      2.9.38
+// @version      2.9.39
 // @description  独立单标签任务工作台：目标编排、单次任务、附件粘贴预览、授权识别、实时消息、内存感知与可中断调度。
-// @updateURL    https://raw.githubusercontent.com/bhrumom/fabushi-chatgpt-auto-confirm-userscript/main/chatgpt-auto-confirm.user.js
-// @downloadURL  https://raw.githubusercontent.com/bhrumom/fabushi-chatgpt-auto-confirm-userscript/main/chatgpt-auto-confirm.user.js
 // @match        https://chatgpt.com/*
 // @match        https://chat.openai.com/*
+// @updateURL    https://raw.githubusercontent.com/bhrumom/fabushi-chatgpt-auto-confirm-userscript/main/chatgpt-auto-confirm.user.js
+// @downloadURL  https://raw.githubusercontent.com/bhrumom/fabushi-chatgpt-auto-confirm-userscript/main/chatgpt-auto-confirm.user.js
 // @grant        none
 // @noframes
 // @run-at       document-idle
@@ -16,7 +16,7 @@
   'use strict';
   if (window.top !== window.self) return;
   const INSTANCE = '__FABUSHI_AUTO_CONFIRM_INSTANCE__';
-  const VERSION = '2.9.38';
+  const VERSION = '2.9.39';
   const BOOTSTRAP_MARKER = 'fabushi-auto-confirm-bootstrap-v1';
   const previousInstance = window[INSTANCE];
   if (previousInstance?.version === VERSION && previousInstance?.active) return;
@@ -55,18 +55,11 @@
   // Session navigation itself is keyed by the persisted ChatGPT URL and never
   // waits for a sidebar retry loop.
   const NO_FINAL_REPLY_RETRY_LIMIT = 4;
-  const NO_FINAL_REPLY_MS = 300000;
-  // Four fast retries catch a short-lived renderer failure. If the same
-  // conversation keeps ending abnormally, keep the task alive with a
-  // persisted exponential backoff instead of converting it into a terminal
-  // error that silently stops the whole tab.
+  // Explicit send failures and unbound ambiguous sends can still use bounded
+  // fresh-session recovery. A bound conversation never becomes a retry
+  // candidate merely because ChatGPT temporarily removes the Stop control.
   const NO_FINAL_REPLY_BACKOFF_BASE_MS = 5 * 60 * 1000;
   const NO_FINAL_REPLY_BACKOFF_MAX_MS = 30 * 60 * 1000;
-  // Once ChatGPT has visibly stopped generating, a missing final turn is an
-  // abnormal end much sooner than the long reload-safe fallback above. This
-  // catches the renderer state where Stop disappeared but no answer/card was
-  // rendered, without treating a brief transition as a failure.
-  const STOP_LOST_FINAL_REPLY_MS = 15000;
   // A final answer may become static on a document that was previously
   // observed in loading/generating state. Keep a short grace period, then
   // finish even when the prior scan was not itself a clear observation.
@@ -2550,16 +2543,15 @@
     const streaming = article?.querySelector('[data-is-streaming="true"],[aria-busy="true"]')
       || [assistant, article].find(node => node?.getAttribute?.('data-is-streaming') === 'true' || node?.getAttribute?.('aria-busy') === 'true');
     const finalByActions = Boolean(content && responseActionsComplete && !stopButton());
-    const finalByMarker = Boolean(content && explicitFinal && !streaming);
     return {
       user: text(user),
       text: content,
-      // ChatGPT may leave a stale streaming attribute on the turn wrapper
-      // after it has mounted the completed reply toolbar. The copy + share,
-      // rating, or feedback pair is the strongest user-visible completion
-      // signal, so it wins over that stale attribute; an explicit static
-      // marker remains the fallback.
-      final: finalByActions || finalByMarker,
+      // Stop can disappear while ChatGPT is waiting for connector approval,
+      // running a tool, or rebuilding the renderer. Completion therefore
+      // requires the current assistant turn's visible reply toolbar:
+      // copy + share/rate/like/dislike, with no Stop button. Static renderer
+      // markers remain diagnostic only and never authorize completion.
+      final: finalByActions,
       owned,
       responseActions: [...responseActions],
       responseActionsComplete,
@@ -2751,33 +2743,13 @@
     const finalStayedStable = sample.final && sample.text && previous?.final
       && previous?.text === sample.text
       && now - Number(previous.finalSince || previous.since || 0) >= FINAL_REPLY_STABILITY_MS;
-    const finalWasStableBeforeTransition = sample.final && sample.text && previous?.clear
-      && previous?.text === sample.text
-      && now - previous.since >= FINAL_REPLY_STABILITY_MS;
-    if (finalStayedStable || finalWasStableBeforeTransition) return { state:'complete' };
-    // ChatGPT can lose the Stop control while the assistant turn is still
-    // absent (or while a renderer error leaves only a partial/empty turn).
-    // Once that transition remains stable, it is an abnormal end and must be
-    // handed to a fresh Chat rather than waiting for the five-minute reload
-    // fallback. `endedAt` is started by the first stable clear observation as
-    // well as a witnessed Stop -> no-Stop transition. The scheduler may return
-    // after Stop already disappeared, so requiring that transient edge would
-    // leave an already-ended conversation waiting for the five-minute fallback.
-    if (previous?.endedAt && now - previous.endedAt >= STOP_LOST_FINAL_REPLY_MS
-      && previous?.text === sample.text && !sample.final) {
-      return { state:'no-final-reply', reason:'会话停止生成后没有新的最终回复或授权卡。' };
-    }
-    if (previous?.clear && now - previous.idleSince >= NO_FINAL_REPLY_MS && !sample.final) return { state:'no-final-reply', reason:'会话已结束但没有新的最终回复。' };
+    if (finalStayedStable) return { state:'complete' };
+    // No Stop button is only an intermediate observation. Connector approval,
+    // tool execution and renderer transitions all legitimately hide Stop.
+    // Without the current reply toolbar, stay bound to this conversation. The
+    // independent three-minute stall watchdog may refresh this same URL, but
+    // classification must never create a fresh chat from Stop disappearance.
     return { state:'waiting' };
-  }
-  function abnormalEndSince(sample, previous, now) {
-    const clear = !sample.stop && !sample.cards && !sample.loading;
-    if (!sample.owned || !clear || sample.final || sample.rateLimit || sample.blocker) return 0;
-    const stable = previous?.text === sample.text && previous?.clear && clear;
-    // Start immediately on the first clear observation, but reset whenever the
-    // visible assistant text changes. `classify` still requires a subsequent
-    // stable scan and the full short grace period before retrying.
-    return stable ? (previous.endedAt || previous.idleSince || now) : now;
   }
   function safeURL(url) {
     const target = new URL(url, location.origin);
@@ -3600,7 +3572,6 @@ function stopAmbiguousSend(task, perform = true, now = Date.now()) {
     const result = classify(sample, previous, now);
     const clear = !sample.stop && !sample.cards && !sample.loading;
     const stable = previous?.text === sample.text && previous?.clear && clear;
-    const endedAt = abnormalEndSince(sample, previous, now);
     const finalSince = sample.final && previous?.final && previous?.text === sample.text
       ? (previous.finalSince || previous.since || now)
       : sample.final ? now : 0;
@@ -3608,7 +3579,6 @@ function stopAmbiguousSend(task, perform = true, now = Date.now()) {
       text:sample.text,
       since:stable ? previous.since : now,
       idleSince:previous?.clear ? previous.idleSince : now,
-      endedAt,
       final:Boolean(sample.final),
       finalSince,
       stop:Boolean(sample.stop),

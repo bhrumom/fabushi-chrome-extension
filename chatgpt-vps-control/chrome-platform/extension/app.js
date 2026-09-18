@@ -4,6 +4,7 @@ import {
   marketplaceInstallAction,
   marketplaceInstalledVersion,
   marketplaceInstallContract,
+  marketplaceDisplayVersion,
   marketplaceItemInstallable,
   marketplaceItemKind,
   marketplaceItemVersion,
@@ -700,6 +701,9 @@ function renderCards(container, items, emptyText) {
     const body = document.createElement("p");
     const release = marketplaceReleaseManifest(item);
     body.textContent = item.description || item.summary || item.blurb || "Fabushi 小程序";
+    const pluginId = itemPluginId(item);
+    const installed = state.installed.find((candidate) => itemPluginId(candidate) === pluginId);
+    const script = userscriptInstalled(pluginId);
     const meta = document.createElement("div");
     meta.className = "meta";
     const contract = marketplaceInstallContract(item);
@@ -709,7 +713,7 @@ function renderCards(container, items, emptyText) {
       ? item.permissions
       : Array.isArray(contract?.permissions) ? contract.permissions : [];
     for (const value of [
-      itemVersion(item),
+      marketplaceDisplayVersion(item, installed, script),
       sourceRef ? `GitHub · ${sourceRef.slice(0, 9)}` : "",
       releaseStatus === "approved" ? "已审核发布" : releaseStatus,
       permissions.length ? `权限 ${permissions.length} 项` : "",
@@ -732,10 +736,7 @@ function renderCards(container, items, emptyText) {
     }
     const actions = document.createElement("div");
     actions.className = "card-actions";
-    const pluginId = itemPluginId(item);
     if (container.id === "marketplace-list" && marketplaceItemInstallable(item)) {
-      const installed = state.installed.find((candidate) => itemPluginId(candidate) === pluginId);
-      const script = userscriptInstalled(pluginId);
       const action = marketplaceInstallAction(item, installed, script);
       const button = document.createElement("button");
       button.type = "button";

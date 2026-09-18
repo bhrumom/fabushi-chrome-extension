@@ -182,6 +182,18 @@ export function marketplaceInstalledVersion(item, installed, userscript) {
   return String(installed?.version || "").trim();
 }
 
+/**
+ * The Marketplace version is a first-install baseline for userscripts. Once
+ * a script is installed, its own metadata version is the user-visible
+ * version, even when the catalogue has intentionally not been republished.
+ */
+export function marketplaceDisplayVersion(item, installed, userscript) {
+  const current = marketplaceInstalledVersion(item, installed, userscript);
+  return marketplaceItemKind(item) === "userscript" && current
+    ? current
+    : marketplaceItemVersion(item);
+}
+
 export function marketplaceInstalledDigest(installed, userscript) {
   return String(
     installed?.artifactSha256
