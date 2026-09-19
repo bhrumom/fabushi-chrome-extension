@@ -9,7 +9,7 @@ Product builds, CI, Releases, and dependency boundaries are maintained here inde
 after the migration acceptance gates pass. Do not add credentials or source paths owned by
 another platform repository.
 
-Current browser release: `0.6.18`. The bundled ChatGPT userscript is `2.9.44` and declares
+Current browser release candidate: `0.6.19`. The bundled ChatGPT userscript is `2.9.46` and declares
 stable Tampermonkey-style `@updateURL` / `@downloadURL` metadata. Marketplace remains the
 first-install/discovery surface; subsequent userscript releases are checked from that URL.
 
@@ -29,3 +29,7 @@ The Chrome package now bundles canonical userscript v2.9.43. The live assistant 
 ## 0.6.18 durable interruption continuation
 
 The host now bundles canonical userscript v2.9.44. After connection interruption refresh exhaustion, the userscript persists a pending same-chat continuation. If ChatGPT still shows Stop, it stops the failed generation and keeps retrying until `继续完成所有` is actually sent. Existing system keep-awake behavior is unchanged.
+
+## 0.6.19 loading recovery + 15-minute stall refresh
+
+The host bundles canonical userscript v2.9.46. Same-route loading recovery now performs a real reload, cancelled/failed navigation re-arms the scheduler, and a no-unload watchdog prevents silent supervision stops. Generic unchanged-conversation refresh waits 15 minutes; unbound ambiguous-send recovery remains 3 minutes. Existing system keep-awake behavior is unchanged.
