@@ -72,6 +72,33 @@ async function writeRecords(records) {
   await chrome.storage.local.set({ [STORAGE_KEY]: records });
 }
 
+function recordNeedsKeepAwake(record, now = Date.now()) {
+  if (!record || record.status === "released" || record.status === "exhausted") return false;
+  if (Number(record.expiresAt || 0) <= now) return false;
+  const state = String(record.taskState || "");
+  return ACTIVE_STATES.has(state) || (state === "blocked" && record.recoveryEligible === true);
+}
+
+export function keepAwakeNeeded(records, now = Date.now()) {
+  return Object.values(records || {}).some((record) => recordNeedsKeepAwake(record, now));
+}
+
+export async function syncKeepAwake(records = null, now = Date.now()) {
+  const current = records || await readRecords();
+  const keepAwake = keepAwakeNeeded(current, now);
+  if (keepAwake) {
+    // "system" keeps Chrome/network execution alive but still allows the
+    // display to turn off and the workstation to lock normally.
+    chrome.power.requestKeepAwake("system");
+  } else {
+    // Always release when no valid lease exists. This is intentionally
+    // idempotent so a freshly restarted MV3 worker can clean up a request
+    // made by its previous worker lifetime.
+    chrome.power.releaseKeepAwake();
+  }
+  return { keepAwake };
+}
+
 function senderTab(sender) {
   const tabId = sender?.tab?.id;
   if (!Number.isInteger(tabId) || tabId < 0) throw new Error("恢复能力请求没有关联有效标签页。");
@@ -151,7 +178,9 @@ async function requestRecoveryCapability(message, sender) {
     status: "granted",
   };
   const entries = Object.entries(records).sort((left, right) => Number(right[1]?.lastSeenAt || 0) - Number(left[1]?.lastSeenAt || 0));
-  await writeRecords(Object.fromEntries(entries.slice(0, MAX_RECORDS)));
+  const trimmed = Object.fromEntries(entries.slice(0, MAX_RECORDS));
+  await writeRecords(trimmed);
+  await syncKeepAwake(trimmed);
   await ensureRecoveryAlarm();
   return grantResponse(next);
 }
@@ -167,6 +196,7 @@ async function releaseRecoveryCapability(message, sender) {
   if (!record || record.tabId !== tabId) return { released: false };
   delete records[ownerTabId];
   await writeRecords(records);
+  await syncKeepAwake(records);
   return { released: true };
 }
 
@@ -244,7 +274,8 @@ async function scanRecoveryRecords(trigger = "alarm") {
       }
     }
     if (changed) await writeRecords(records);
-    return { changed };
+    await syncKeepAwake(records, now);
+    return { changed, keepAwake: keepAwakeNeeded(records, now) };
   })().finally(() => { scanPromise = null; });
   return scanPromise;
 }
@@ -289,8 +320,22 @@ chrome.tabs.onRemoved.addListener((tabId) => {
       delete records[ownerTabId];
       changed = true;
     }
-    if (changed) await writeRecords(records);
+    if (changed) {
+      await writeRecords(records);
+      await syncKeepAwake(records);
+    }
   })().catch(() => {});
 });
 
-void ensureRecoveryAlarm().catch(() => {});
+chrome.runtime.onStartup?.addListener(() => {
+  void Promise.all([ensureRecoveryAlarm(), scanRecoveryRecords("browser-startup")]).catch(() => {});
+});
+
+chrome.runtime.onInstalled?.addListener(() => {
+  void Promise.all([ensureRecoveryAlarm(), scanRecoveryRecords("extension-installed")]).catch(() => {});
+});
+
+// Module evaluation is the MV3 service-worker start boundary. Reconcile
+// immediately as well as through the 30-second alarm so lock/sleep protection
+// is restored after worker eviction without waiting for a page message.
+void Promise.all([ensureRecoveryAlarm(), scanRecoveryRecords("service-worker-start")]).catch(() => {});
