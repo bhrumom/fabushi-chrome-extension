@@ -24,7 +24,7 @@ jobs:
         run: |
           set -euo pipefail
           version="$(node -p "require('./chatgpt-vps-control/chrome-platform/extension/manifest.json').version")"
-          test "$version" = "0.6.16"
+          test "$version" = "0.6.17"
           while IFS= read -r -d '' file; do
             node --check "$file"
           done < <(find chatgpt-vps-control/chrome-platform/extension -type f -name '*.js' -print0)
