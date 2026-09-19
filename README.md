@@ -9,7 +9,7 @@ Product builds, CI, Releases, and dependency boundaries are maintained here inde
 after the migration acceptance gates pass. Do not add credentials or source paths owned by
 another platform repository.
 
-Current browser release candidate: `0.6.17`. The bundled ChatGPT userscript is `2.9.43` and declares
+Current browser release: `0.6.17`. The bundled ChatGPT userscript is `2.9.43` and declares
 stable Tampermonkey-style `@updateURL` / `@downloadURL` metadata. Marketplace remains the
 first-install/discovery surface; subsequent userscript releases are checked from that URL.
 
