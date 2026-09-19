@@ -4,4 +4,4 @@
 |---|---|---|---|---|
 | FCE-HR-001 | Lease-aware system keep-awake + bundle/release | HR-1..HR-5 | PR CI + main CI + Release | done (PR #3 / v0.6.15) |
 | FCE-HR-002 | Bundle userscript v2.9.42 and publish host v0.6.16 | H6-H10 | PR CI + main CI + Release | done (PR #5 / v0.6.16) |
-| FCE-HR-003 | Bundle userscript v2.9.43 and publish host v0.6.17 | H11-H15 | PR CI + main CI + Release | in-progress |
+| FCE-HR-003 | Bundle userscript v2.9.43 and publish host v0.6.17 | H11-H15 | PR CI + main CI + Release | done (PR #7 / v0.6.17) |
