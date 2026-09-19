@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ChatGPT 自动确认 · Fabushi
 // @namespace    https://fabushi.ombhrum.com/userscripts/chatgpt-auto-confirm
-// @version      2.9.39
+// @version      2.9.41
 // @description  独立单标签任务工作台：目标编排、单次任务、附件粘贴预览、授权识别、实时消息、内存感知与可中断调度。
 // @match        https://chatgpt.com/*
 // @match        https://chat.openai.com/*
@@ -16,7 +16,7 @@
   'use strict';
   if (window.top !== window.self) return;
   const INSTANCE = '__FABUSHI_AUTO_CONFIRM_INSTANCE__';
-  const VERSION = '2.9.39';
+  const VERSION = '2.9.41';
   const BOOTSTRAP_MARKER = 'fabushi-auto-confirm-bootstrap-v1';
   const previousInstance = window[INSTANCE];
   if (previousInstance?.version === VERSION && previousInstance?.active) return;
@@ -51,9 +51,9 @@
   const TAB_SESSION_KEY = 'fabushi-workbench-tab-session-v1';
   const LEGACY_OWNER_KEY = 'fabushi-workbench-legacy-owner-v1';
   const ROOT = 'fabushi-auto-confirm-root';
-  // This limit is only for a conversation that ended without a final reply.
-  // Session navigation itself is keyed by the persisted ChatGPT URL and never
-  // waits for a sidebar retry loop.
+  // This limit is only for unbound ambiguous sends that still have no durable
+  // conversation identity after recovery. Once a real /c/<id> URL is bound,
+  // abnormal reply recovery stays in that conversation until a true final reply.
   const NO_FINAL_REPLY_RETRY_LIMIT = 4;
   // Explicit send failures and unbound ambiguous sends can still use bounded
   // fresh-session recovery. A bound conversation never becomes a retry
@@ -87,8 +87,13 @@
   const MAX_REVIEW_REPAIR_ATTEMPTS = 2;
   const ROUTE_HYDRATION_TIMEOUT_MS = 30000;
   const ROUTE_RECOVERY_LIMIT = 2;
-  const CONNECTION_INTERRUPTED_REFRESH_LIMIT = 2;
-  const CONNECTION_INTERRUPTED_REFRESH_COOLDOWN_MS = 15000;
+  const CONTINUATION_PROMPT = '继续完成所有';
+  const CONTINUATION_SEND_COOLDOWN_MS = 60 * 1000;
+  const CONNECTION_INTERRUPTED_REFRESH_LIMIT = 3;
+  const ABNORMAL_NO_FINAL_CONTINUE_AFTER_MS = 30 * 60 * 1000;
+  const STOP_MISSING_CONTINUE_GRACE_MS = 15 * 1000;
+  const CONNECTION_INTERRUPTED_REFRESH_COOLDOWN_MS = STALLED_REFRESH_MS;
+  const RATE_LIMIT_FRESH_RETRY_AFTER = 3;
   const SEND_UI_WAIT_MS = 45000;
   // A single browser tab can only render one ChatGPT route at a time, but
   // independent conversations continue server-side. Rotate inspection of
@@ -2251,8 +2256,8 @@
     }
     return '';
   }
-  function sendTimeoutNotice() {
-    const pattern = /消息发送超时\s*[，,]?\s*请重试|message (?:send|sending) timed out|failed to send/i;
+  function sendTimeoutNotice(turn = null) {
+    const pattern = /消息(?:发送)?(?:超时|错误|失败)\s*[，,。.!]?\s*请重试|message (?:send|sending) timed out|message (?:error|failed)[\s,:-]*(?:please )?(?:retry|try again)|failed to send/i;
     const retryPattern = /^(?:重试|再次尝试|再试一次|retry|try again|again)(?:\b|$)/i;
     const retryControls = 'button,a,[role="button"]';
     const hasRetryControl = node => {
@@ -2275,7 +2280,9 @@
       if (!parent || own(parent)) continue;
       if (!pattern.test(normalize(currentNode.nodeValue)) || !visible(parent)) continue;
       const message = parent.closest('[data-message-author-role]');
-      if (!message || hasRetryControl(parent)) return true;
+      if (!message) return true;
+      if (turn?.article && !(turn.article === message || turn.article.contains?.(message))) continue;
+      if (hasRetryControl(parent)) return true;
     }
     return false;
   }
@@ -2295,42 +2302,48 @@
   }
   function refreshInterruptedConversation(task, perform = true, now = Date.now()) {
     const conversationURL = currentConversationURL() || canonicalConversationURL(task?.url);
-    if (!task || !conversationURL) return false;
+    if (!task || !conversationURL) return 'wait';
+    let changed = false;
     if (task.connectionInterruptedURL !== conversationURL) {
       task.connectionInterruptedURL = conversationURL;
       task.connectionInterruptedRefreshAttempts = 0;
       task.connectionInterruptedRefreshAt = 0;
+      task.connectionInterruptedSince = now;
       task.connectionInterruptedRefreshExhausted = false;
+      changed = true;
+    } else if (!Number(task.connectionInterruptedSince || 0)) {
+      task.connectionInterruptedSince = now;
+      changed = true;
     }
+    task.state = 'waiting';
     const attempts = Number(task.connectionInterruptedRefreshAttempts || 0);
-    if (task.connectionInterruptedRefreshExhausted || attempts >= CONNECTION_INTERRUPTED_REFRESH_LIMIT) {
-      if (!task.connectionInterruptedRefreshExhausted) {
-        task.connectionInterruptedRefreshExhausted = true;
-        task.state = 'waiting';
-        log(task, `连接中断提示在 ${CONNECTION_INTERRUPTED_REFRESH_LIMIT} 次刷新后仍存在；已停止重复刷新，保留当前会话和任务记录等待恢复。`);
-        save();
-      }
-      return false;
+    if (attempts >= CONNECTION_INTERRUPTED_REFRESH_LIMIT) {
+      task.connectionInterruptedRefreshExhausted = true;
+      log(task, `“连接已中断，正在等待完整回复”连续刷新 ${CONNECTION_INTERRUPTED_REFRESH_LIMIT} 次后仍存在；停止继续刷新，改为在当前会话追加“${CONTINUATION_PROMPT}”。`);
+      save();
+      return 'continue';
     }
-    if (now - Number(task.connectionInterruptedRefreshAt || 0) < CONNECTION_INTERRUPTED_REFRESH_COOLDOWN_MS) return false;
+    const lastRefreshAt = Number(task.connectionInterruptedRefreshAt || 0);
+    if (lastRefreshAt && now - lastRefreshAt < CONNECTION_INTERRUPTED_REFRESH_COOLDOWN_MS) {
+      if (changed) save();
+      return 'wait';
+    }
     const nextAttempt = attempts + 1;
     task.connectionInterruptedRefreshAttempts = nextAttempt;
     task.connectionInterruptedRefreshAt = now;
     task.connectionInterruptedRefreshExhausted = false;
-    task.state = 'waiting';
-    log(task, `检测到“连接已中断，正在等待完整回复”；正在刷新当前会话（第 ${nextAttempt}/${CONNECTION_INTERRUPTED_REFRESH_LIMIT} 次），不会新建会话或重复发送。`);
+    log(task, `检测到“连接已中断，正在等待完整回复”；正在刷新当前会话（第 ${nextAttempt}/${CONNECTION_INTERRUPTED_REFRESH_LIMIT} 次）。若第 ${CONNECTION_INTERRUPTED_REFRESH_LIMIT} 次刷新后仍存在，将直接在本会话追加“${CONTINUATION_PROMPT}”，不会新建会话。`);
     save();
-    if (!perform) return true;
+    if (!perform) return 'refresh';
     navigating = true;
     try { location.reload(); } catch (error) {
       navigating = false;
-      task.connectionInterruptedRefreshExhausted = true;
       task.state = 'waiting';
-      log(task, `连接中断后的页面刷新失败：${error.message}；已保留当前任务等待。`);
+      log(task, `连接中断后的页面刷新失败：${error.message}；已保留当前会话，后续仍会继续恢复。`);
       save();
-      return false;
+      return 'wait';
     }
-    return true;
+    return 'refresh';
   }
   function stalledProgressSignature(sample) {
     return JSON.stringify({
@@ -2394,24 +2407,59 @@
   function dispatchCooldownRemaining(now = Date.now()) {
     return Math.max(0, Number(data.lastDispatchAt || 0) + MIN_SEND_INTERVAL_MS - now);
   }
-  function restForRateLimit(task) {
-    const cooldownUntil = Math.max(Number(task.cooldownUntil || 0), Date.now() + RATE_LIMIT_COOLDOWN_MS);
+  function restForRateLimit(task, now = Date.now()) {
+    const previousCooldownUntil = Number(task.cooldownUntil || 0);
+    const newEpisode = previousCooldownUntil <= now;
+    if (newEpisode) task.rateLimitEpisodes = Number(task.rateLimitEpisodes || 0) + 1;
+    if (newEpisode && Number(task.rateLimitEpisodes || 0) > RATE_LIMIT_FRESH_RETRY_AFTER) {
+      const episodes = Number(task.rateLimitEpisodes || 0);
+      clearDispatchIntent(task);
+      task.rateLimitEpisodes = 0;
+      task.cooldownUntil = 0;
+      task.state = 'queued';
+      delete task.pausedState;
+      log(task, `检测到 ChatGPT 请求过于频繁已超过 ${RATE_LIMIT_FRESH_RETRY_AFTER} 次（第 ${episodes} 次）；已结束当前会话目标并切换到新的 ChatGPT 会话原样重发当前任务，保留目标、阶段、轮次和附件。`);
+      save();
+      // Move off the rate-limited conversation immediately. If ChatGPT still
+      // exposes a global rate-limit banner on the fresh root, the next scan
+      // will safely wait there rather than hammering another request.
+      if (location.pathname !== '/') {
+        try { directNavigate(new URL('/', location.origin), task); } catch {}
+      }
+      return 100;
+    }
+    const cooldownUntil = Math.max(previousCooldownUntil, now + RATE_LIMIT_COOLDOWN_MS);
     task.cooldownUntil = cooldownUntil;
-    state(task, 'waiting', `检测到 ChatGPT 请求过于频繁；插件暂停发送、导航和刷新，预计 ${Math.ceil((cooldownUntil - Date.now()) / 60000)} 分钟后自动恢复。`);
+    task.state = 'waiting';
+    if (newEpisode) {
+      log(task, `检测到 ChatGPT 请求过于频繁（第 ${task.rateLimitEpisodes}/${RATE_LIMIT_FRESH_RETRY_AFTER} 次）；插件暂停发送、导航和刷新，预计 ${Math.ceil((cooldownUntil - now) / 60000)} 分钟后自动恢复。若超过 ${RATE_LIMIT_FRESH_RETRY_AFTER} 次将自动新开会话重发。`);
+    }
     save();
-    return Math.max(1, cooldownUntil - Date.now());
+    return Math.max(1, cooldownUntil - now);
   }
   function latestTurn(task = null) {
     const users = nodes('[data-message-author-role=user]');
     const scoped = Boolean(task && typeof task === 'object');
     const markedUser = scoped ? taskMarkerUser(task) : null;
-    const user = scoped ? markedUser : users.at(-1);
-    // A task marker is necessary but not sufficient: if another user turn is
-    // newer in the DOM, the assistant response after the marker belongs to a
-    // different turn (or to another task left behind during route rotation).
-    // Fail closed instead of allowing the global "last assistant" heuristic
-    // to attribute that response to the current task.
-    const owned = !scoped || Boolean(user && user === users.at(-1));
+    const latestUser = users.at(-1);
+    // Recovery continuations intentionally do not repeat the Fabushi task
+    // marker. Treat the exact continuation prompt as part of the same task
+    // only when it follows this task's marked user turn and this task has
+    // actually recorded a continuation send.
+    const continuationUser = scoped
+      && markedUser
+      && latestUser
+      && latestUser !== markedUser
+      && Number(task.continuationCount || 0) > 0
+      && normalize(text(latestUser)) === CONTINUATION_PROMPT
+      && Boolean(markedUser.compareDocumentPosition(latestUser) & Node.DOCUMENT_POSITION_FOLLOWING)
+        ? latestUser
+        : null;
+    const user = scoped ? (continuationUser || markedUser) : latestUser;
+    // A task marker (or a verified continuation after it) is necessary but not
+    // sufficient: if a different user turn is newer, fail closed instead of
+    // attributing that response to this task.
+    const owned = !scoped || Boolean(user && user === latestUser && (user === markedUser || user === continuationUser));
     if (scoped && !owned) {
       return {
         user: text(user),
@@ -2945,6 +2993,17 @@ function stopAmbiguousSend(task, perform = true, now = Date.now()) {
     task.rendererRecoveryExhausted = false;
     task.routeRecoveryAttempts = 0;
     task.workspaceDocumentRecoveryAttempts = 0;
+    task.continuationSentAt = 0;
+    task.continuationCount = 0;
+    task.connectionInterruptedSince = 0;
+    task.connectionInterruptedURL = '';
+    task.connectionInterruptedRefreshAttempts = 0;
+    task.connectionInterruptedRefreshAt = 0;
+    task.connectionInterruptedRefreshExhausted = false;
+    task.abnormalNoFinalSince = 0;
+    task.abnormalNoFinalSignature = '';
+    task.stopMissingSince = 0;
+    task.stopMissingSignature = '';
     resetAmbiguousSendRecovery(task);
     task.updatedAt = now;
     state(task, 'waiting', '已从当前唯一的新会话恢复本轮发送结果；沿用原发送标识和附件，开始检查最终回复，不会重复发送。');
@@ -3012,6 +3071,15 @@ function stopAmbiguousSend(task, perform = true, now = Date.now()) {
     task.rendererRecoveryExhausted = false;
     task.routeRecoveryAttempts = 0;
     task.workspaceDocumentRecoveryAttempts = 0;
+    task.continuationSentAt = 0;
+    task.continuationCount = 0;
+    task.connectionInterruptedSince = 0;
+    task.connectionInterruptedURL = '';
+    task.connectionInterruptedRefreshAttempts = 0;
+    task.connectionInterruptedRefreshAt = 0;
+    task.connectionInterruptedRefreshExhausted = false;
+    task.abnormalNoFinalSince = 0;
+    task.abnormalNoFinalSignature = '';
     resetAmbiguousSendRecovery(task);
     resetAttachmentUploadState(task);
     observations.delete(task.id);
@@ -3043,6 +3111,15 @@ function stopAmbiguousSend(task, perform = true, now = Date.now()) {
 
   function queueNoFinalReplyRetry(task, reason = '会话已结束但没有最终回复') {
     if (!task) return '';
+    const boundURL = canonicalConversationURL(task.url);
+    if (boundURL) {
+      task.state = 'waiting';
+      task.abnormalNoFinalSince = Number(task.abnormalNoFinalSince || Date.now());
+      task.updatedAt = Date.now();
+      log(task, `${reason}；本轮已有明确会话链接，已保留当前会话，不再走 fresh-session 异常重发。后续会在同一会话追加“${CONTINUATION_PROMPT}”，直到得到真正最终回复。`);
+      save();
+      return 'waiting';
+    }
     const attempts = Number(task.noFinalReplyAttempts || 0);
     if (attempts >= NO_FINAL_REPLY_RETRY_LIMIT) {
       const cycle = Number(task.noFinalReplyRecoveryCycles || 0) + 1;
@@ -3154,6 +3231,61 @@ function stopAmbiguousSend(task, perform = true, now = Date.now()) {
     const form = input?.closest('form') || document;
     return nodes('button[data-testid="send-button"],button[aria-label="发送提示词"],button[aria-label="发送提示"],button[aria-label="Send prompt"],button[aria-label="发送消息"]', form).find(enabled)
       || nodes('button', form).find(node => enabled(node) && /^(发送|send|submit)(?:\s|$)/i.test(label(node)));
+  }
+  async function sendContinuation(task, signal, reason = '当前会话异常中断', now = Date.now()) {
+    if (!task || terminal.has(task.state) || task.state === 'paused') return false;
+    const liveURL = currentConversationURL();
+    const taskURL = canonicalConversationURL(task.url);
+    if (!liveURL || !taskURL || liveURL !== taskURL) return false;
+    if (now - Number(task.continuationSentAt || 0) < CONTINUATION_SEND_COOLDOWN_MS) return false;
+    if (stopButton() || cards().length || blocker() || rateLimitNotice()) {
+      task.state = 'waiting';
+      return false;
+    }
+    const input = composer();
+    if (!input) {
+      task.state = 'waiting';
+      return false;
+    }
+    let draft = normalize(input.value || input.textContent);
+    if (draft && draft !== CONTINUATION_PROMPT) {
+      setInput(input, '');
+      draft = '';
+    }
+    if (!draft) setInput(input, CONTINUATION_PROMPT);
+    let button = sendButtonFor(input);
+    if (!button) {
+      task.state = 'waiting';
+      return false;
+    }
+    await delay(300, signal);
+    check(signal);
+    button = sendButtonFor(input) || (enabled(button) ? button : null);
+    if (!button) {
+      task.state = 'waiting';
+      return false;
+    }
+    const sentAt = Date.now();
+    task.continuationSentAt = sentAt;
+    task.continuationCount = Number(task.continuationCount || 0) + 1;
+    task.connectionInterruptedSince = 0;
+    task.connectionInterruptedURL = '';
+    task.connectionInterruptedRefreshAttempts = 0;
+    task.connectionInterruptedRefreshAt = 0;
+    task.connectionInterruptedRefreshExhausted = false;
+    task.abnormalNoFinalSince = 0;
+    task.abnormalNoFinalSignature = '';
+    task.stopMissingSince = 0;
+    task.stopMissingSignature = '';
+    task.updatedAt = sentAt;
+    observations.delete(task.id);
+    task.state = 'waiting';
+    log(task, `${reason}；已在原会话输入并发送“${CONTINUATION_PROMPT}”（第 ${task.continuationCount} 次）。继续等待真正最终回复；在最终回复操作栏出现并稳定前绝不新开下一会话。`);
+    save();
+    check(signal);
+    button.click();
+    measurements.sends++;
+    return true;
   }
   function waitForSendUI(task, reason) {
     const now = Date.now();
@@ -3441,6 +3573,9 @@ function stopAmbiguousSend(task, perform = true, now = Date.now()) {
     task.lastBlockedReason = '';
     task.lastBlockedRecoveryAt = 0;
     task.cooldownUntil = 0;
+    task.rateLimitEpisodes = 0;
+    task.stopMissingSince = 0;
+    task.stopMissingSignature = '';
     task.sendPrepared = false;
     task.preparedPrompt = '';
     task.sendUiWaitSince = 0;
@@ -3450,6 +3585,15 @@ function stopAmbiguousSend(task, perform = true, now = Date.now()) {
     task.rendererRecoveryExhausted = false;
     task.routeRecoveryAttempts = 0;
     task.workspaceDocumentRecoveryAttempts = 0;
+    task.continuationSentAt = 0;
+    task.continuationCount = 0;
+    task.connectionInterruptedSince = 0;
+    task.connectionInterruptedURL = '';
+    task.connectionInterruptedRefreshAttempts = 0;
+    task.connectionInterruptedRefreshAt = 0;
+    task.connectionInterruptedRefreshExhausted = false;
+    task.abnormalNoFinalSince = 0;
+    task.abnormalNoFinalSignature = '';
     resetAmbiguousSendRecovery(task);
     resetAttachmentUploadState(task);
     observations.delete(task.id);
@@ -3488,7 +3632,7 @@ function stopAmbiguousSend(task, perform = true, now = Date.now()) {
   async function inspect(task, signal) {
     // Existing conversation inspection must not depend on the composer. A
     // stuck/partial renderer can hide the input while still exposing enough
-    // turn state to detect an abnormal end and recover in a fresh Chat.
+    // turn state to detect an abnormal end and keep recovering the bound chat.
     if (!await navigate(task.url, signal, task, false)) return;
     check(signal);
     const liveURL = currentConversationURL();
@@ -3507,18 +3651,39 @@ function stopAmbiguousSend(task, perform = true, now = Date.now()) {
     // marker is visible. During a rotation the old document can briefly retain
     // another task's error banner; handling it before that check would consume
     // this task's retry budget.
-    if (pageBelongsToTask && connectionInterruptedNotice()) {
-      refreshInterruptedConversation(task);
+    const interrupted = Boolean(pageBelongsToTask && !turn.final && !pending.length && connectionInterruptedNotice());
+    if (interrupted) {
+      const action = refreshInterruptedConversation(task, true, Date.now());
+      if (action === 'continue') {
+        await sendContinuation(task, signal, `“连接已中断，正在等待完整回复”连续刷新 ${CONNECTION_INTERRUPTED_REFRESH_LIMIT} 次后仍存在`);
+      }
       return;
     }
-    if (pageBelongsToTask && sendTimeoutNotice()) {
-      queueNoFinalReplyRetry(task, '检测到“消息发送超时，请重试”');
+    // "Three refreshes" is a consecutive budget. If the interruption banner
+    // actually disappears on this owned route, a later unrelated interruption
+    // starts from attempt one instead of inheriting the old incident.
+    if (pageBelongsToTask && task.connectionInterruptedURL === liveURL
+      && Number(task.connectionInterruptedRefreshAttempts || 0) > 0) {
+      task.connectionInterruptedSince = 0;
+      task.connectionInterruptedURL = '';
+      task.connectionInterruptedRefreshAttempts = 0;
+      task.connectionInterruptedRefreshAt = 0;
+      task.connectionInterruptedRefreshExhausted = false;
+      save();
+    }
+    if (pageBelongsToTask && !turn.final && !pending.length && sendTimeoutNotice(turn)) {
+      await sendContinuation(task, signal, '检测到“消息错误/发送超时，请重试”');
       return;
     }
+    const stopPresent = turn.owned ? Boolean(stopButton()) : false;
+    const rawLoading = Boolean(pageLoadingState());
+    // In a bound owned conversation, active generation exposes Stop. A
+    // decorative/stale spinner without Stop must not mask an abnormal stop.
+    const effectiveLoading = Boolean(rawLoading && (!turn.owned || stopPresent));
     const sample = {
-      stop:turn.owned ? Boolean(stopButton()) : false,
+      stop:stopPresent,
       cards:turn.owned ? pending.length : 0,
-      loading:Boolean(pageLoadingState()),
+      loading:effectiveLoading,
       blocker:blocker(),
       rateLimit:rateLimitNotice(),
       // A matching URL is only the route boundary. The task marker on the
@@ -3542,6 +3707,66 @@ function stopAmbiguousSend(task, perform = true, now = Date.now()) {
       ? Number(previous.progressSince)
       : now;
     const stalledFor = progressUnchanged ? now - progressSince : 0;
+    const abnormalNoFinalEligible = Boolean(
+      sample.routeOwned
+      && sample.owned
+      && !sample.final
+      && !sample.stop
+      && !sample.cards
+      && !sample.loading
+      && !sample.rateLimit
+      && !sample.blocker
+      && !task.attempted,
+    );
+    let abnormalNoFinalChanged = false;
+    if (!abnormalNoFinalEligible) {
+      if (task.abnormalNoFinalSince || task.abnormalNoFinalSignature) {
+        task.abnormalNoFinalSince = 0;
+        task.abnormalNoFinalSignature = '';
+        abnormalNoFinalChanged = true;
+      }
+    } else if (task.abnormalNoFinalSignature !== progressSignature) {
+      task.abnormalNoFinalSignature = progressSignature;
+      task.abnormalNoFinalSince = now;
+      abnormalNoFinalChanged = true;
+    } else if (!Number(task.abnormalNoFinalSince || 0)) {
+      task.abnormalNoFinalSince = now;
+      abnormalNoFinalChanged = true;
+    }
+    if (abnormalNoFinalChanged) save();
+    const abnormalNoFinalFor = abnormalNoFinalEligible
+      ? Math.max(0, now - Number(task.abnormalNoFinalSince || now))
+      : 0;
+    const stopMissingEligible = Boolean(
+      sample.routeOwned
+      && sample.owned
+      && !sample.final
+      && !sample.stop
+      && !sample.cards
+      && !sample.rateLimit
+      && !sample.blocker
+      && !task.attempted
+      && composer(),
+    );
+    let stopMissingChanged = false;
+    if (!stopMissingEligible) {
+      if (task.stopMissingSince || task.stopMissingSignature) {
+        task.stopMissingSince = 0;
+        task.stopMissingSignature = '';
+        stopMissingChanged = true;
+      }
+    } else if (task.stopMissingSignature !== progressSignature) {
+      task.stopMissingSignature = progressSignature;
+      task.stopMissingSince = now;
+      stopMissingChanged = true;
+    } else if (!Number(task.stopMissingSince || 0)) {
+      task.stopMissingSince = now;
+      stopMissingChanged = true;
+    }
+    if (stopMissingChanged) save();
+    const stopMissingFor = stopMissingEligible
+      ? Math.max(0, now - Number(task.stopMissingSince || now))
+      : 0;
     const stallEligible = Boolean(
       sample.routeOwned
       && pageBelongsToTask
@@ -3592,6 +3817,16 @@ function stopAmbiguousSend(task, perform = true, now = Date.now()) {
     if (sample.owned && task.preview !== sample.text) {
       task.preview = sample.text.slice(-6000);
       paint(); // Live preview is transient; streaming does not write localStorage.
+    }
+    if (stopMissingEligible
+      && stopMissingFor >= STOP_MISSING_CONTINUE_GRACE_MS
+      && now - Number(task.continuationSentAt || 0) >= CONTINUATION_SEND_COOLDOWN_MS) {
+      if (await sendContinuation(task, signal, '检测到当前会话 Stop 已消失且没有授权卡或最终回复，判定为异常停止', now)) return;
+    }
+    if (abnormalNoFinalEligible
+      && abnormalNoFinalFor >= ABNORMAL_NO_FINAL_CONTINUE_AFTER_MS
+      && now - Number(task.continuationSentAt || 0) >= CONTINUATION_SEND_COOLDOWN_MS) {
+      if (await sendContinuation(task, signal, '当前会话连续 30 分钟没有得到最终回复', now)) return;
     }
     if (stallEligible && refreshStalledConversation(task)) return;
     if (result.state === 'complete') { finish(task, sample.text); return; }

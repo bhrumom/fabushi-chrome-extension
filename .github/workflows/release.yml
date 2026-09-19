@@ -24,10 +24,13 @@ jobs:
         run: |
           set -euo pipefail
           version="$(node -p "require('./chatgpt-vps-control/chrome-platform/extension/manifest.json').version")"
-          test "$version" = "0.6.14"
+          test "$version" = "0.6.15"
           while IFS= read -r -d '' file; do
             node --check "$file"
           done < <(find chatgpt-vps-control/chrome-platform/extension -type f -name '*.js' -print0)
+
+      - name: Test host resilience contract
+        run: node --test chatgpt-vps-control/tests/host-resilience.test.mjs
 
       - name: Validate release tag
         if: startsWith(github.ref, 'refs/tags/')

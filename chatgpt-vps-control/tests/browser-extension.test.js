@@ -325,5 +325,5 @@ test("first-class browser control preserves the legacy Bridge command, action, a
   assert.match(current, /generation changed before Fabushi could claim/);
   assert.match(current, /Only ordinary http\/https tabs can be controlled/);
   const manifest = JSON.parse(await readFile(resolve("chrome-platform/extension/manifest.json"), "utf8"));
-  for (const permission of ["debugger", "nativeMessaging", "downloads", "tabs", "tabGroups", "webNavigation", "scripting", "userScripts", "storage", "alarms"]) assert.ok(manifest.permissions.includes(permission), permission);
+  for (const permission of ["debugger", "nativeMessaging", "power", "downloads", "tabs", "tabGroups", "webNavigation", "scripting", "userScripts", "storage", "alarms"]) assert.ok(manifest.permissions.includes(permission), permission);
 });
