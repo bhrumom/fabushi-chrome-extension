@@ -19,10 +19,10 @@ test("Fabushi Chrome platform includes the product shell, browser bridge, and in
   const manifest = JSON.parse(await source("manifest.json"));
   assert.equal(manifest.manifest_version, 3);
   assert.equal(manifest.name, "Fabushi");
-  assert.equal(manifest.version, "0.6.13");
+  assert.equal(manifest.version, "0.6.16");
   assert.equal(manifest.action.default_popup, "app.html");
   assert.equal(manifest.background.service_worker, "service-worker.js");
-  for (const permission of ["debugger", "nativeMessaging", "downloads", "tabs", "tabGroups", "webNavigation", "scripting", "userScripts", "storage", "alarms"]) assert.ok(manifest.permissions.includes(permission), permission);
+  for (const permission of ["debugger", "nativeMessaging", "power", "downloads", "tabs", "tabGroups", "webNavigation", "scripting", "userScripts", "storage", "alarms"]) assert.ok(manifest.permissions.includes(permission), permission);
   assert.deepEqual(manifest.host_permissions, ["<all_urls>"]);
   assert.equal(manifest.content_scripts?.[0]?.js?.[0], "userscript-content.js");
   const worker = await source("service-worker.js");
@@ -43,7 +43,7 @@ test("Fabushi Chrome platform includes the product shell, browser bridge, and in
   await source("userscript-content.js");
   await source("userscript.css");
   const userscript = await source("userscript/chatgpt-auto-confirm.user.js");
-  assert.match(userscript, /^\/\/ @version\s+2\.9\.41$/m);
+  assert.match(userscript, /^\/\/ @version\s+2\.9\.42$/m);
   assert.match(userscript, /^\/\/ @updateURL\s+https:\/\/raw\.githubusercontent\.com\/bhrumom\/fabushi-chatgpt-auto-confirm-userscript\/main\/chatgpt-auto-confirm\.user\.js$/m);
   assert.match(userscript, /^\/\/ @downloadURL\s+https:\/\/raw\.githubusercontent\.com\/bhrumom\/fabushi-chatgpt-auto-confirm-userscript\/main\/chatgpt-auto-confirm\.user\.js$/m);
   assert.match(userscript, /hasResponseCompletionAction/);
