@@ -9,7 +9,7 @@ const bundledPath = new URL("../chrome-platform/extension/userscript/chatgpt-aut
 test("Fabushi host keeps only the system awake while an active recovery lease exists", async () => {
   const manifest = JSON.parse(await readFile(manifestPath, "utf8"));
   const recovery = await readFile(recoveryPath, "utf8");
-  assert.equal(manifest.version, "0.6.15");
+  assert.equal(manifest.version, "0.6.16");
   assert.ok(manifest.permissions.includes("power"));
   assert.match(recovery, /requestKeepAwake\(["']system["']\)/);
   assert.doesNotMatch(recovery, /requestKeepAwake\(["']display["']\)/);
@@ -30,9 +30,13 @@ test("MV3 lifecycle and the recovery watchdog re-synchronize keep-awake state", 
 
 test("released browser package bundles the paired userscript release", async () => {
   const bundled = await readFile(bundledPath, "utf8");
-  assert.match(bundled, /^\/\/ @version\s+2\.9\.41$/m);
-  assert.match(bundled, /const VERSION = '2\.9\.41'/);
+  assert.match(bundled, /^\/\/ @version\s+2\.9\.42$/m);
+  assert.match(bundled, /const VERSION = '2\.9\.42'/);
   assert.match(bundled, /CONNECTION_INTERRUPTED_REFRESH_LIMIT = 3/);
   assert.match(bundled, /RATE_LIMIT_FRESH_RETRY_AFTER = 3/);
   assert.match(bundled, /STOP_MISSING_CONTINUE_GRACE_MS/);
+  assert.match(bundled, /CONVERSATION_LENGTH_CARRY_MAX/);
+  assert.match(bundled, /conversationLengthLimitNotice/);
+  assert.match(bundled, /queueConversationLengthHandoff/);
+  assert.match(bundled, /conversationLengthContinuationContext/);
 });
