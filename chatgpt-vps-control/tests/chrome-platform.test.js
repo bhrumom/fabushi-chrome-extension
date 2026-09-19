@@ -43,7 +43,7 @@ test("Fabushi Chrome platform includes the product shell, browser bridge, and in
   await source("userscript-content.js");
   await source("userscript.css");
   const userscript = await source("userscript/chatgpt-auto-confirm.user.js");
-  assert.match(userscript, /^\/\/ @version\s+2\.9\.39$/m);
+  assert.match(userscript, /^\/\/ @version\s+2\.9\.41$/m);
   assert.match(userscript, /^\/\/ @updateURL\s+https:\/\/raw\.githubusercontent\.com\/bhrumom\/fabushi-chatgpt-auto-confirm-userscript\/main\/chatgpt-auto-confirm\.user\.js$/m);
   assert.match(userscript, /^\/\/ @downloadURL\s+https:\/\/raw\.githubusercontent\.com\/bhrumom\/fabushi-chatgpt-auto-confirm-userscript\/main\/chatgpt-auto-confirm\.user\.js$/m);
   assert.match(userscript, /hasResponseCompletionAction/);
