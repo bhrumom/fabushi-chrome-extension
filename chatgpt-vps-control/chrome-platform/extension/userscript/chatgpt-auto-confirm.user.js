@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ChatGPT 自动确认 · Fabushi
 // @namespace    https://fabushi.ombhrum.com/userscripts/chatgpt-auto-confirm
-// @version      2.9.42
+// @version      2.9.43
 // @description  独立单标签任务工作台：目标编排、单次任务、附件粘贴预览、授权识别、实时消息、内存感知与可中断调度。
 // @match        https://chatgpt.com/*
 // @match        https://chat.openai.com/*
@@ -16,7 +16,7 @@
   'use strict';
   if (window.top !== window.self) return;
   const INSTANCE = '__FABUSHI_AUTO_CONFIRM_INSTANCE__';
-  const VERSION = '2.9.42';
+  const VERSION = '2.9.43';
   const BOOTSTRAP_MARKER = 'fabushi-auto-confirm-bootstrap-v1';
   const previousInstance = window[INSTANCE];
   if (previousInstance?.version === VERSION && previousInstance?.active) return;
@@ -92,7 +92,11 @@
   const CONNECTION_INTERRUPTED_REFRESH_LIMIT = 3;
   const ABNORMAL_NO_FINAL_CONTINUE_AFTER_MS = 30 * 60 * 1000;
   const STOP_MISSING_CONTINUE_GRACE_MS = 15 * 1000;
-  const CONNECTION_INTERRUPTED_REFRESH_COOLDOWN_MS = STALLED_REFRESH_MS;
+  // Connection interruption is an explicit recoverable error, not a generic
+  // idle page. Retry it on a short cadence after each completed reload so
+  // three persistent failures converge quickly instead of waiting 3 minutes
+  // between attempts. The counter itself remains persisted across reloads.
+  const CONNECTION_INTERRUPTED_REFRESH_COOLDOWN_MS = 10 * 1000;
   const RATE_LIMIT_FRESH_RETRY_AFTER = 3;
   // The carry is normally much smaller than this. Keep a generous bound so a
   // long assistant reply can survive a conversation-length handoff without
@@ -2337,17 +2341,35 @@
     const half = Math.floor((CONVERSATION_LENGTH_CARRY_MAX - 120) / 2);
     return `${reply.slice(0, half)}\n\n[...上一会话回复中间内容因长度过大省略...]\n\n${reply.slice(-half)}`;
   }
-  function connectionInterruptedNotice() {
-    const pattern = /连接已中断[。.!]?\s*正在等待完整回复[。.!]?|connection (?:was |has been )?interrupted[.!]?\s*(?:we(?:'re| are) )?waiting for (?:the )?full response/i;
-    // This recovery signal must come from ChatGPT chrome/status UI. A user or
-    // assistant may quote the same sentence while discussing the failure, and
-    // the workbench logs it after detection; neither is allowed to self-trigger.
+  const connectionInterruptedPattern = /^(?:连接已中断[。.!]?\s*正在等待完整回复[。.!]?|connection (?:was |has been )?interrupted[.!]?\s*(?:we(?:'re| are) )?waiting for (?:the )?full response[.!]?)$/i;
+  function connectionInterruptedNotice(turn = null) {
+    const matches = value => connectionInterruptedPattern.test(normalize(value));
+    // Current ChatGPT builds can render this product error inside the live
+    // assistant turn instead of page chrome. Accept only a standalone matching
+    // text node from the currently owned assistant article. This keeps user
+    // quotations, code/blockquote examples and longer assistant discussion
+    // from consuming the recovery budget.
+    const scopedArticle = turn?.owned ? turn.article : null;
+    if (scopedArticle) {
+      const walker = document.createTreeWalker(scopedArticle, NodeFilter.SHOW_TEXT);
+      let currentNode;
+      while ((currentNode = walker.nextNode())) {
+        const parent = currentNode.parentElement;
+        if (!parent || own(parent) || parent.closest('blockquote,pre,code,[data-message-author-role="user"]')) continue;
+        const direct = normalize(currentNode.nodeValue);
+        if (direct && direct.length <= 240 && matches(direct) && visible(parent)) return true;
+      }
+    }
+    // Older renderer variants expose the same status as page chrome. Exclude
+    // every transcript turn and the Fabushi workbench so quoted task text and
+    // our own logs cannot self-trigger.
     const walker = document.createTreeWalker(document.body || document.documentElement, NodeFilter.SHOW_TEXT);
     let currentNode;
     while ((currentNode = walker.nextNode())) {
       const parent = currentNode.parentElement;
-      if (!parent || own(parent) || parent.closest('[data-message-author-role]')) continue;
-      if (pattern.test(normalize(currentNode.nodeValue)) && visible(parent)) return true;
+      if (!parent || own(parent) || parent.closest('[data-message-author-role],blockquote,pre,code')) continue;
+      const direct = normalize(currentNode.nodeValue);
+      if (direct && direct.length <= 240 && matches(direct) && visible(parent)) return true;
     }
     return false;
   }
@@ -3761,7 +3783,7 @@ function stopAmbiguousSend(task, perform = true, now = Date.now()) {
     // marker is visible. During a rotation the old document can briefly retain
     // another task's error banner; handling it before that check would consume
     // this task's retry budget.
-    const interrupted = Boolean(pageBelongsToTask && !turn.final && !pending.length && connectionInterruptedNotice());
+    const interrupted = Boolean(pageBelongsToTask && !pending.length && connectionInterruptedNotice(turn));
     if (interrupted) {
       const action = refreshInterruptedConversation(task, true, Date.now());
       if (action === 'continue') {
@@ -3769,18 +3791,12 @@ function stopAmbiguousSend(task, perform = true, now = Date.now()) {
       }
       return;
     }
-    // "Three refreshes" is a consecutive budget. If the interruption banner
-    // actually disappears on this owned route, a later unrelated interruption
-    // starts from attempt one instead of inheriting the old incident.
-    if (pageBelongsToTask && task.connectionInterruptedURL === liveURL
-      && Number(task.connectionInterruptedRefreshAttempts || 0) > 0) {
-      task.connectionInterruptedSince = 0;
-      task.connectionInterruptedURL = '';
-      task.connectionInterruptedRefreshAttempts = 0;
-      task.connectionInterruptedRefreshAt = 0;
-      task.connectionInterruptedRefreshExhausted = false;
-      save();
-    }
+    // Do not clear the interruption budget merely because a reload is between
+    // DOM states. ChatGPT commonly shows loading/generating for a few seconds
+    // before repainting the same interruption notice. The budget is scoped to
+    // the durable conversation URL and is reset by refreshInterruptedConversation
+    // when the URL changes, by sendContinuation after a real continuation send,
+    // or by finish after a true final reply.
     if (pageBelongsToTask && !turn.final && !pending.length && sendTimeoutNotice(turn)) {
       await sendContinuation(task, signal, '检测到“消息错误/发送超时，请重试”');
       return;
