@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ChatGPT 自动确认 · Fabushi
 // @namespace    https://fabushi.ombhrum.com/userscripts/chatgpt-auto-confirm
-// @version      2.9.43
+// @version      2.9.44
 // @description  独立单标签任务工作台：目标编排、单次任务、附件粘贴预览、授权识别、实时消息、内存感知与可中断调度。
 // @match        https://chatgpt.com/*
 // @match        https://chat.openai.com/*
@@ -16,7 +16,7 @@
   'use strict';
   if (window.top !== window.self) return;
   const INSTANCE = '__FABUSHI_AUTO_CONFIRM_INSTANCE__';
-  const VERSION = '2.9.43';
+  const VERSION = '2.9.44';
   const BOOTSTRAP_MARKER = 'fabushi-auto-confirm-bootstrap-v1';
   const previousInstance = window[INSTANCE];
   if (previousInstance?.version === VERSION && previousInstance?.active) return;
@@ -89,6 +89,8 @@
   const ROUTE_RECOVERY_LIMIT = 2;
   const CONTINUATION_PROMPT = '继续完成所有';
   const CONTINUATION_SEND_COOLDOWN_MS = 60 * 1000;
+  const PENDING_CONTINUATION_STOP_CLICK_COOLDOWN_MS = 3000;
+  const PENDING_CONTINUATION_WAIT_LOG_MS = 10000;
   const CONNECTION_INTERRUPTED_REFRESH_LIMIT = 3;
   const ABNORMAL_NO_FINAL_CONTINUE_AFTER_MS = 30 * 60 * 1000;
   const STOP_MISSING_CONTINUE_GRACE_MS = 15 * 1000;
@@ -3153,6 +3155,7 @@ function stopAmbiguousSend(task, perform = true, now = Date.now()) {
     task.connectionInterruptedRefreshExhausted = false;
     task.abnormalNoFinalSince = 0;
     task.abnormalNoFinalSignature = '';
+    clearPendingContinuation(task);
     resetAmbiguousSendRecovery(task);
     resetAttachmentUploadState(task);
     observations.delete(task.id);
@@ -3338,12 +3341,81 @@ function stopAmbiguousSend(task, perform = true, now = Date.now()) {
     return nodes('button[data-testid="send-button"],button[aria-label="发送提示词"],button[aria-label="发送提示"],button[aria-label="Send prompt"],button[aria-label="发送消息"]', form).find(enabled)
       || nodes('button', form).find(node => enabled(node) && /^(发送|send|submit)(?:\s|$)/i.test(label(node)));
   }
-  async function sendContinuation(task, signal, reason = '当前会话异常中断', now = Date.now()) {
+  function clearPendingContinuation(task) {
+    if (!task) return;
+    task.pendingContinuationReason = '';
+    task.pendingContinuationURL = '';
+    task.pendingContinuationSince = 0;
+    task.pendingContinuationStopClickedAt = 0;
+    task.pendingContinuationLastWaitLogAt = 0;
+  }
+  function queuePendingContinuation(task, reason = '当前会话异常中断', now = Date.now()) {
+    if (!task || terminal.has(task.state) || task.state === 'paused') return false;
+    const liveURL = currentConversationURL() || canonicalConversationURL(task.url);
+    const taskURL = canonicalConversationURL(task.url);
+    if (!liveURL || !taskURL || liveURL !== taskURL) return false;
+    const sameIntent = task.pendingContinuationURL === taskURL && Boolean(task.pendingContinuationReason);
+    task.pendingContinuationReason = String(reason || '当前会话异常中断').slice(0, 1000);
+    task.pendingContinuationURL = taskURL;
+    task.pendingContinuationSince = sameIntent && Number(task.pendingContinuationSince || 0)
+      ? Number(task.pendingContinuationSince)
+      : now;
+    task.state = 'waiting';
+    task.updatedAt = now;
+    if (!sameIntent) {
+      log(task, `${task.pendingContinuationReason}；已进入强制续发状态。脚本会留在当前会话，若仍有“停止回答”先停止失败生成，然后持续重试直到真正提交“${CONTINUATION_PROMPT}”。`);
+    }
+    save();
+    return true;
+  }
+  async function attemptPendingContinuation(task, signal, turn = null, now = Date.now()) {
+    if (!task?.pendingContinuationReason) return 'none';
+    if (terminal.has(task.state) || task.state === 'paused') return 'paused';
+    const liveURL = currentConversationURL();
+    const taskURL = canonicalConversationURL(task.url);
+    const pendingURL = canonicalConversationURL(task.pendingContinuationURL);
+    if (!liveURL || !taskURL || !pendingURL || liveURL !== taskURL || pendingURL !== taskURL) {
+      clearPendingContinuation(task);
+      save();
+      return 'cleared';
+    }
+    // Approval/rate-limit/security blockers keep their existing authority.
+    // Do not throw away the pending continuation; retry after they clear.
+    if (cards().length || blocker() || rateLimitNotice()) {
+      task.state = 'waiting';
+      return 'defer';
+    }
+    const stop = stopButton();
+    if (stop) {
+      const lastClick = Number(task.pendingContinuationStopClickedAt || 0);
+      if (!lastClick || now - lastClick >= PENDING_CONTINUATION_STOP_CLICK_COOLDOWN_MS) {
+        task.pendingContinuationStopClickedAt = now;
+        task.state = 'waiting';
+        task.updatedAt = now;
+        log(task, `强制续发尚未发送：当前仍有“停止回答”。已点击停止失败生成；待输入框恢复后会继续重试并真正发送“${CONTINUATION_PROMPT}”。`);
+        save();
+        check(signal);
+        stop.click();
+      }
+      return 'stopping';
+    }
+    const reason = task.pendingContinuationReason;
+    const sent = await sendContinuation(task, signal, reason, now, { ignoreCooldown:true });
+    if (sent) return 'sent';
+    task.state = 'waiting';
+    if (now - Number(task.pendingContinuationLastWaitLogAt || 0) >= PENDING_CONTINUATION_WAIT_LOG_MS) {
+      task.pendingContinuationLastWaitLogAt = now;
+      log(task, `强制续发仍在等待输入框/发送按钮恢复；pending intent 已保留，不会因为“连接已中断”提示消失而丢失。恢复后将发送“${CONTINUATION_PROMPT}”。`);
+      save();
+    }
+    return 'waiting';
+  }
+  async function sendContinuation(task, signal, reason = '当前会话异常中断', now = Date.now(), options = {}) {
     if (!task || terminal.has(task.state) || task.state === 'paused') return false;
     const liveURL = currentConversationURL();
     const taskURL = canonicalConversationURL(task.url);
     if (!liveURL || !taskURL || liveURL !== taskURL) return false;
-    if (now - Number(task.continuationSentAt || 0) < CONTINUATION_SEND_COOLDOWN_MS) return false;
+    if (!options.ignoreCooldown && now - Number(task.continuationSentAt || 0) < CONTINUATION_SEND_COOLDOWN_MS) return false;
     if (stopButton() || cards().length || blocker() || rateLimitNotice()) {
       task.state = 'waiting';
       return false;
@@ -3371,6 +3443,11 @@ function stopAmbiguousSend(task, perform = true, now = Date.now()) {
       task.state = 'waiting';
       return false;
     }
+    check(signal);
+    // Commit the UI action first. Pending forced-continuation state is cleared
+    // only after the Send click has actually been issued.
+    button.click();
+    measurements.sends++;
     const sentAt = Date.now();
     task.continuationSentAt = sentAt;
     task.continuationCount = Number(task.continuationCount || 0) + 1;
@@ -3383,14 +3460,12 @@ function stopAmbiguousSend(task, perform = true, now = Date.now()) {
     task.abnormalNoFinalSignature = '';
     task.stopMissingSince = 0;
     task.stopMissingSignature = '';
+    clearPendingContinuation(task);
     task.updatedAt = sentAt;
     observations.delete(task.id);
     task.state = 'waiting';
     log(task, `${reason}；已在原会话输入并发送“${CONTINUATION_PROMPT}”（第 ${task.continuationCount} 次）。继续等待真正最终回复；在最终回复操作栏出现并稳定前绝不新开下一会话。`);
     save();
-    check(signal);
-    button.click();
-    measurements.sends++;
     return true;
   }
   function waitForSendUI(task, reason) {
@@ -3719,6 +3794,7 @@ function stopAmbiguousSend(task, perform = true, now = Date.now()) {
     task.connectionInterruptedRefreshExhausted = false;
     task.abnormalNoFinalSince = 0;
     task.abnormalNoFinalSignature = '';
+    clearPendingContinuation(task);
     resetAmbiguousSendRecovery(task);
     resetAttachmentUploadState(task);
     observations.delete(task.id);
@@ -3783,11 +3859,20 @@ function stopAmbiguousSend(task, perform = true, now = Date.now()) {
     // marker is visible. During a rotation the old document can briefly retain
     // another task's error banner; handling it before that check would consume
     // this task's retry budget.
-    const interrupted = Boolean(pageBelongsToTask && !pending.length && connectionInterruptedNotice(turn));
+    if (task.pendingContinuationReason) {
+      const pendingAction = await attemptPendingContinuation(task, signal, turn, Date.now());
+      if (pendingAction === 'sent' || pendingAction === 'stopping' || pendingAction === 'waiting') return;
+      // 'defer' intentionally falls through so approval/rate-limit/blocker
+      // handlers below retain their existing authority.
+    }
+    const interrupted = Boolean(!task.pendingContinuationReason && pageBelongsToTask && !pending.length && connectionInterruptedNotice(turn));
     if (interrupted) {
       const action = refreshInterruptedConversation(task, true, Date.now());
       if (action === 'continue') {
-        await sendContinuation(task, signal, `“连接已中断，正在等待完整回复”连续刷新 ${CONNECTION_INTERRUPTED_REFRESH_LIMIT} 次后仍存在`);
+        const reason = `“连接已中断，正在等待完整回复”连续刷新 ${CONNECTION_INTERRUPTED_REFRESH_LIMIT} 次后仍存在`;
+        if (queuePendingContinuation(task, reason, Date.now())) {
+          await attemptPendingContinuation(task, signal, turn, Date.now());
+        }
       }
       return;
     }
