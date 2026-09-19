@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ChatGPT 自动确认 · Fabushi
 // @namespace    https://fabushi.ombhrum.com/userscripts/chatgpt-auto-confirm
-// @version      2.9.44
+// @version      2.9.46
 // @description  独立单标签任务工作台：目标编排、单次任务、附件粘贴预览、授权识别、实时消息、内存感知与可中断调度。
 // @match        https://chatgpt.com/*
 // @match        https://chat.openai.com/*
@@ -16,7 +16,7 @@
   'use strict';
   if (window.top !== window.self) return;
   const INSTANCE = '__FABUSHI_AUTO_CONFIRM_INSTANCE__';
-  const VERSION = '2.9.44';
+  const VERSION = '2.9.46';
   const BOOTSTRAP_MARKER = 'fabushi-auto-confirm-bootstrap-v1';
   const previousInstance = window[INSTANCE];
   if (previousInstance?.version === VERSION && previousInstance?.active) return;
@@ -66,17 +66,17 @@
   const FINAL_REPLY_STABILITY_MS = 4000;
   // A bound conversation can stop changing while ChatGPT is waiting for an
   // authorization card, a renderer update, or an image/tool result. Reload
-  // the same route after each three-minute idle period so the page can
-  // rediscover those controls without creating a second Work/planner send.
-  const STALLED_REFRESH_MS = 3 * 60 * 1000;
-  // Keep the persisted reload interval aligned with the stall detector. A
-  // page that remains unchanged can therefore be retried forever, but never
-  // more than once per three minutes.
+  // the same route only after a full fifteen-minute idle period so long-running
+  // tool/agent work is not disturbed by an aggressive generic stall refresh.
+  const STALLED_REFRESH_MS = 15 * 60 * 1000;
+  // Keep the persisted generic-stall reload interval aligned with the detector.
+  // A page that remains unchanged can therefore be retried forever, but never
+  // more than once per fifteen minutes.
   const STALLED_REFRESH_COOLDOWN_MS = STALLED_REFRESH_MS;
-  // An ambiguous Send click gets the same three-minute recovery cadence.
-  // Prefer a current-round bound conversation first; only an unbound send
-  // may eventually be redispatched after several page recovery cycles.
-  const AMBIGUOUS_SEND_REFRESH_MS = STALLED_REFRESH_MS;
+  // Ambiguous Send confirmation is a separate recovery path. Keep its existing
+  // three-minute cadence instead of inheriting the much longer generic stall
+  // threshold, so an unbound click can still be resolved in bounded time.
+  const AMBIGUOUS_SEND_REFRESH_MS = 3 * 60 * 1000;
   const AMBIGUOUS_SEND_REFRESH_LIMIT = NO_FINAL_REPLY_RETRY_LIMIT;
   // A permanent page error must not create a hot loop of new conversations.
   // The first blocked recovery is immediate; repeated failures remain queued
@@ -165,6 +165,11 @@
   const HOST_NAVIGATION_GRANTED_TYPE = 'navigation-guard.granted';
   const HOST_NAVIGATION_DENIED_TYPE = 'navigation-guard.denied';
   const HOST_NAVIGATION_RESPONSE_TTL_MS = 5000;
+  // tick() suppresses scheduling while a document navigation is in flight.
+  // If Chrome accepts a reload/replace request but this document never unloads,
+  // this watchdog releases that barrier so one failed navigation cannot silence
+  // the automation indefinitely.
+  const NAVIGATION_COMMIT_WATCHDOG_MS = 8000;
   const LOCAL_NAVIGATION_COOLDOWN_MS = 30000;
   const LOCAL_NAVIGATION_BURST_WINDOW_MS = 5 * 60 * 1000;
   const LOCAL_NAVIGATION_BURST_LIMIT = 6;
@@ -723,6 +728,34 @@
     return false;
   }
 
+  function armNavigationCommitWatchdog(task, reason = 'navigation', delayMs = NAVIGATION_COMMIT_WATCHDOG_MS) {
+    clearTimeout(navigationTimer);
+    navigationTimer = window.setTimeout(() => {
+      navigationTimer = null;
+      if (!running || !navigating) return;
+      navigating = false;
+      if (task && !terminal.has(task.state) && task.state !== 'paused') {
+        task.updatedAt = Date.now();
+        log(task, `页面恢复导航已提交但当前文档在 ${Math.ceil(delayMs / 1000)} 秒内没有卸载；已自动解除导航等待并继续监督，不会静默停止。`);
+        save();
+      }
+      schedule(100);
+    }, Math.max(100, Number(delayMs) || NAVIGATION_COMMIT_WATCHDOG_MS));
+  }
+  function resetRendererRecoveryState(task) {
+    if (!task) return false;
+    const changed = Boolean(task.rendererRecoveryExhausted
+      || task.routeRecoveryAttempts
+      || task.workspaceDocumentRecoveryAttempts
+      || task.sendUiWaitSince);
+    if (!changed) return false;
+    task.rendererRecoveryExhausted = false;
+    task.routeRecoveryAttempts = 0;
+    task.workspaceDocumentRecoveryAttempts = 0;
+    task.sendUiWaitSince = 0;
+    task.updatedAt = Date.now();
+    return true;
+  }
   function beginGuardedNavigation(targetHref, task, {
     replace = true,
     force = false,
@@ -732,7 +765,8 @@
     reason = 'route-switch',
   } = {}) {
     if (navigationRequestPending) return false;
-    const targetPath = ticketPath || new URL(targetHref, location.origin).pathname;
+    const target = new URL(targetHref, location.origin);
+    const targetPath = ticketPath || target.pathname;
     const expected = navigationTicketFor(targetHref, task, targetPath, { recovery });
     navigationRequestPending = true;
     navigating = true;
@@ -750,7 +784,6 @@
           task.updatedAt = now;
           save();
         }
-        schedule(100);
         return;
       }
       const latest = data.tasks.find(item => item.id === expected.taskId);
@@ -771,22 +804,24 @@
         return;
       }
       latest.navigationGuardRetryAt = 0;
-      if (new URL(targetHref, location.origin).pathname === location.pathname) {
+      const sameRoute = target.pathname === location.pathname;
+      if (sameRoute && !recovery) {
         cancelHostNavigationLease(result.leaseId, 'same-route');
         sessionStorage.removeItem(NAV);
         navigating = false;
         return;
       }
       try {
-        // A permit is only a short-lived opportunity, not a completed
-        // navigation. Consume the standalone/local budget at the final commit
-        // point; the MV3 host independently records the exact target URL from
-        // tabs.onUpdated. Stale grants above are cancelled and consume no
-        // cooldown, preventing a repeated 30-second permit livelock.
+        // Recovery against the current route must be a real reload. Treating
+        // it as a same-route no-op caused the scheduler to stop after logging
+        // a recovery attempt without ever changing the document.
         rememberNavigationCommit();
-        if (replace) location.replace(targetHref);
+        armNavigationCommitWatchdog(latest, reason);
+        if (sameRoute && recovery) location.reload();
+        else if (replace) location.replace(targetHref);
         else location.assign(targetHref);
       } catch (error) {
+        clearTimeout(navigationTimer); navigationTimer = null;
         navigating = false;
         if (task) {
           state(task, 'waiting', '页面切换失败：' + error.message + '；已保留任务等待下一次受控恢复。');
@@ -794,14 +829,17 @@
         }
       }
     }).catch(error => {
+      clearTimeout(navigationTimer); navigationTimer = null;
       navigating = false;
       if (task && !terminal.has(task.state) && task.state !== 'paused') {
         state(task, 'waiting', '宿主页面保护暂时不可用：' + error.message);
         save();
       }
-      schedule(LOCAL_NAVIGATION_COOLDOWN_MS);
     }).finally(() => {
       navigationRequestPending = false;
+      // tick.finally cannot schedule while navigating is true. Any branch
+      // that cancels before a navigation commit must explicitly re-arm it.
+      if (running && !navigating) schedule(100);
     });
     return false;
   }
@@ -2452,11 +2490,11 @@
     const attempts = Number(task.stalledRefreshAttempts || 0);
     // Older builds persisted this terminal-looking flag after the second
     // reload. It is now only a migration marker and must never block a later
-    // three-minute retry cycle.
+    // fifteen-minute retry cycle.
     if (task.stalledRefreshExhausted) {
       task.stalledRefreshExhausted = false;
       task.state = 'waiting';
-      log(task, '已解除历史停滞刷新次数上限；会话若继续无变化，将每 3 分钟自动刷新，直到任务完成或被暂停。');
+      log(task, '已解除历史停滞刷新次数上限；会话若继续无变化，将每 15 分钟自动刷新，直到任务完成或被暂停。');
       save();
     }
     if (now - Number(task.stalledRefreshAt || 0) < STALLED_REFRESH_COOLDOWN_MS) return false;
@@ -2466,14 +2504,14 @@
     task.stalledRefreshExhausted = false;
     task.state = 'waiting';
     observations.delete(task.id);
-    log(task, `当前会话连续 3 分钟没有可见变化；正在刷新当前页面（第 ${nextAttempt} 次，后续仍无变化时每 3 分钟继续刷新），保留会话、发送标识、附件和当前阶段，不会重复发送。`);
+    log(task, `当前会话连续 15 分钟没有可见变化；正在刷新当前页面（第 ${nextAttempt} 次，后续仍无变化时每 15 分钟继续刷新），保留会话、发送标识、附件和当前阶段，不会重复发送。`);
     save();
     if (!perform) return true;
     navigating = true;
     try { location.reload(); } catch (error) {
       navigating = false;
       task.state = 'waiting';
-      log(task, `停滞会话刷新失败：${error.message}；已保留当前任务，3 分钟后继续尝试。`);
+      log(task, `停滞会话刷新失败：${error.message}；已保留当前任务，15 分钟后继续尝试。`);
       save();
       return false;
     }
@@ -3274,14 +3312,10 @@ function stopAmbiguousSend(task, perform = true, now = Date.now()) {
       sameRouteWaitUntil = 0;
       sameRouteWaitSince = 0;
       navigating = false;
-      if (task?.rendererRecoveryExhausted || task?.routeRecoveryAttempts) {
-        task.rendererRecoveryExhausted = false;
-        task.routeRecoveryAttempts = 0;
-        task.workspaceDocumentRecoveryAttempts = 0;
-        task.sendUiWaitSince = 0;
-        task.updatedAt = Date.now();
-        save();
-      }
+      // A task marker proves route ownership, not renderer health. Keep the
+      // recovery budget while the page still reports loading.
+      const loadingReason = pageLoadingState();
+      if (!loadingReason && resetRendererRecoveryState(task)) save();
       return true;
     }
     const target = safeURL(url);
@@ -3292,14 +3326,9 @@ function stopAmbiguousSend(task, perform = true, now = Date.now()) {
       // here made a stuck renderer impossible to classify as no-final-reply.
       if (!requireComposer || (inputReady && !loadingReason)) {
         sessionStorage.removeItem(NAV); sameRouteWaitUntil = 0; sameRouteWaitSince = 0; navigating = false;
-        if (task?.rendererRecoveryExhausted || task?.routeRecoveryAttempts) {
-          task.rendererRecoveryExhausted = false;
-          task.routeRecoveryAttempts = 0;
-          task.workspaceDocumentRecoveryAttempts = 0;
-          task.sendUiWaitSince = 0;
-          task.updatedAt = Date.now();
-          save();
-        }
+        // Inspection may proceed on a partially rendered route, but recovery
+        // counters reset only after the loading signal has really disappeared.
+        if (!loadingReason && resetRendererRecoveryState(task)) save();
         return true;
       }
       if (requireComposer && loadingReason) return holdForChatGPTLoading(task, loadingReason);
