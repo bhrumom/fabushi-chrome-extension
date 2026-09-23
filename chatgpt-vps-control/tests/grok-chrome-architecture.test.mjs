@@ -138,3 +138,12 @@ test("shipping remote Coordinator is authenticated, service-worker-only, and reg
   assert.match(account, /__fabushiGetCoordinatorAccountSession/);
   assert.doesNotMatch(`${runtime}\n${workspace}`, /__fabushiGetCoordinatorAccountSession|short-lived-token|accessToken:\s*current\.accessToken/);
 });
+
+
+test("Agent attach returns the Coordinator-resynced cursor rather than stale worker projection", async () => {
+  const broker = await source("agent-broker.js");
+  const protocol = await source("agent-protocol.js");
+  assert.match(protocol, /mergeRunSnapshot/);
+  assert.match(broker, /mergeRunSnapshot\(cursor, resync\.result\)/);
+  assert.match(broker, /cursor:\s*recoveredCursor/);
+});
