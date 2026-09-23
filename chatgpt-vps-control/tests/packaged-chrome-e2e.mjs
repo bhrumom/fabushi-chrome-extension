@@ -159,13 +159,24 @@ async function targets() {
   return (await cdp.send("Target.getTargets")).targetInfos || [];
 }
 
-async function extensionWorker() {
+async function extensionIdFromProfile() {
+  try {
+    const preferences = JSON.parse(await readFile(join(profile, "Default", "Preferences"), "utf8"));
+    const settings = preferences?.extensions?.settings;
+    if (!settings || typeof settings !== "object") return "";
+    for (const [extensionId, setting] of Object.entries(settings)) {
+      if (!setting || typeof setting !== "object") continue;
+      const configuredPath = typeof setting.path === "string" ? resolve(setting.path) : "";
+      if (configuredPath === extensionDir && setting.state !== 0) return extensionId;
+    }
+  } catch {}
+  return "";
+}
+
+async function extensionWorker(extensionId) {
   const infos = await targets();
-  return infos.find((target) =>
-    target.type === "service_worker"
-    && /^chrome-extension:\/\//.test(target.url)
-    && target.url.endsWith("/service-worker.js")
-  );
+  const prefix = `chrome-extension://${extensionId}/`;
+  return infos.find((target) => target.type === "service_worker" && target.url.startsWith(prefix));
 }
 
 async function openApp(extensionId) {
@@ -290,8 +301,7 @@ async function exampleTabCount(page) {
 }
 
 try {
-  const firstWorker = await waitFor(extensionWorker, "initial extension Service Worker", 25_000);
-  const extensionId = new URL(firstWorker.url).host;
+  const extensionId = await waitFor(extensionIdFromProfile, "installed unpacked extension ID", 25_000);
   assert.match(extensionId, /^[a-p]{32}$/);
 
   const hostManifest = {
@@ -338,12 +348,12 @@ try {
 
   // Terminate the MV3 Service Worker, then reopen the app. The second resume
   // is the signal for the fixture to publish the terminal transcript.
-  const workerBeforeRestart = await waitFor(extensionWorker, "Service Worker before restart");
+  const workerBeforeRestart = await waitFor(() => extensionWorker(extensionId), "Service Worker before restart");
   await cdp.send("Target.closeTarget", { targetId: workerBeforeRestart.targetId });
   await cdp.send("Target.closeTarget", { targetId: page.targetId });
 
   await waitFor(async () => {
-    const worker = await extensionWorker();
+    const worker = await extensionWorker(extensionId);
     return !worker || worker.targetId !== workerBeforeRestart.targetId;
   }, "old Service Worker termination", 10_000);
 
