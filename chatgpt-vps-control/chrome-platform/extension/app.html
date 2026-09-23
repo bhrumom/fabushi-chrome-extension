@@ -13,9 +13,9 @@
   <div class="shell">
     <aside class="sidebar">
       <div class="brand"><div class="brand-mark">F</div><div><strong>Fabushi</strong><span>Chrome</span></div></div>
-      <button class="new-chat" id="new-chat" type="button">＋ 新对话</button>
+      <button class="new-chat" id="new-chat" type="button">＋ New Agent</button>
       <nav aria-label="Fabushi">
-        <button type="button" data-view="chats" aria-current="page">聊天</button>
+        <button type="button" data-view="chats" aria-current="page">Agents</button>
         <button type="button" data-view="miniapps">小程序</button>
         <button type="button" data-view="marketplace">Marketplace</button>
         <button type="button" data-view="browser">浏览器</button>
@@ -34,7 +34,7 @@
         </div>
       </header>
       <nav class="compact-nav" aria-label="Fabushi 快速导航">
-        <button type="button" data-view="chats" aria-current="page">聊天</button>
+        <button type="button" data-view="chats" aria-current="page">Agents</button>
         <button type="button" data-view="miniapps">小程序</button>
         <button type="button" data-view="marketplace">Marketplace</button>
         <button type="button" data-view="browser">浏览器</button>
@@ -45,12 +45,63 @@
       <section id="loading" class="loading"><span class="spinner"></span><div><strong>正在启动 Fabushi 插件</strong><p>正在读取 Chrome 本地脚本和 Marketplace；桌面端是可选增强。</p></div></section>
 
       <section id="chats-view" class="view" hidden>
-        <div class="split">
-          <div class="list-panel"><div class="panel-heading"><strong>最近聊天</strong><span id="chat-count">0</span></div><div id="chat-list" class="stack"></div></div>
-          <div class="conversation-panel">
-            <div id="conversation-empty" class="empty"><div class="orb">F</div><h2>Fabushi Chrome 插件</h2><p>浏览器控制、油猴脚本和任务工作台由同一个 Fabushi 扩展承载；聊天账户同步属于可选桌面增强。</p></div>
-            <div id="conversation" hidden><div id="conversation-title" class="conversation-title"></div><div id="messages" class="messages"></div><form id="composer"><textarea id="composer-input" rows="2" placeholder="给 Fabushi 发消息…"></textarea><button type="submit">发送</button></form></div>
+        <div class="split agent-split">
+          <div class="list-panel agent-roster">
+            <div class="panel-heading"><strong>Agents</strong><span id="chat-count">0</span></div>
+            <div id="chat-list" class="stack"></div>
           </div>
+
+          <div class="conversation-panel agent-conversation">
+            <div class="agent-runbar">
+              <div>
+                <span class="eyebrow">Fabushi Agent · Grok 0.18 architecture</span>
+                <div id="conversation-title" class="conversation-title">Agent</div>
+              </div>
+              <div class="run-statuses">
+                <span id="agent-transport-state" class="pill">coordinator unavailable</span>
+                <span id="agent-run-state" class="run-state" data-phase="recovering">recovering</span>
+              </div>
+            </div>
+
+            <div id="conversation-empty" class="empty">
+              <div class="orb">F</div>
+              <h2>Fabushi Agent</h2>
+              <p>Agent runs and transcripts are Coordinator/Host-owned. This extension reconnects and projects the same run after MV3 worker suspension or UI reload.</p>
+            </div>
+
+            <div id="conversation" hidden>
+              <div id="messages" class="messages" aria-live="polite"></div>
+              <form id="composer" class="agent-composer">
+                <textarea id="composer-input" rows="2" placeholder="Message your Agent…" aria-label="Message Agent"></textarea>
+                <div class="composer-actions">
+                  <button id="stop-run" class="secondary-button" type="button" hidden>Stop</button>
+                  <button type="submit">Send</button>
+                </div>
+              </form>
+            </div>
+          </div>
+
+          <aside class="agent-context-panel" aria-label="Agent context">
+            <div class="context-section">
+              <div class="context-heading"><strong>Agent</strong></div>
+              <label class="field-label" for="agent-name-input">Name</label>
+              <input id="agent-name-input" class="context-input" type="text" autocomplete="off" />
+              <div class="context-actions">
+                <button id="agent-save-name" type="button">Save</button>
+                <button id="agent-delete" class="danger-button" type="button">Delete</button>
+              </div>
+            </div>
+
+            <div class="context-section">
+              <div class="context-heading"><strong>MCP / Plugins / Tools</strong><button id="agent-refresh-context" type="button" title="Refresh context">↻</button></div>
+              <div id="agent-mcp-list" class="context-list"></div>
+            </div>
+
+            <div class="context-section">
+              <div class="context-heading"><strong>Computer / Browser</strong></div>
+              <div id="agent-browser-context" class="context-list"></div>
+            </div>
+          </aside>
         </div>
       </section>
 
