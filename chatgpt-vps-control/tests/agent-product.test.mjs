@@ -39,11 +39,11 @@ test("waiting-user cards resolve through exact Grok Coordinator contracts", asyn
   const workspace = await source("agent-workspace.js");
 
   assert.match(workspace, /resolveLocalToolPermission/);
-  assert.match(workspace, /resolution:\s*["']allow-once["']/);
-  assert.match(workspace, /resolution:\s*["']deny["']/);
+  assert.match(workspace, /resolveLocalToolPermission\(entry, ["']allow-once["']\)/);
+  assert.match(workspace, /resolveLocalToolPermission\(entry, ["']deny["']\)/);
   assert.match(workspace, /resolveAutoReviewApproval/);
-  assert.match(workspace, /resolution:\s*["']approved["']/);
-  assert.match(workspace, /resolution:\s*["']denied["']/);
+  assert.match(workspace, /resolveAutoReviewApproval\(entry, ["']approved["']\)/);
+  assert.match(workspace, /resolveAutoReviewApproval\(entry, ["']denied["']\)/);
   assert.match(workspace, /respondToWidget/);
   assert.match(workspace, /submitSecret/);
   assert.match(workspace, /input\.type = ["']password["']/);
