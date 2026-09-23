@@ -90,3 +90,14 @@ test("Native Messaging remains optional and the Agent surface does not expose cr
   assert.doesNotMatch(`${runtime}\n${workspace}`, /refreshToken|refresh_token|password\s*[:=]|accessToken\s*[:=]/);
   assert.doesNotMatch(workspace, /connectNative|nativeMessaging/);
 });
+
+
+test("same-account browser tool calls are idempotent across Service Worker reconnects", async () => {
+  const account = await source("account-browser-agent.js");
+  assert.match(account, /CALL_REPLAY_KEY/);
+  assert.match(account, /cachedCallResponse\(requestId\)/);
+  assert.match(account, /cacheCallResponse\(requestId, response\)/);
+  assert.match(account, /activeCalls\.get\(requestId\)/);
+  assert.match(account, /already executed; its original result exceeded the durable replay limit/);
+  assert.match(account, /chrome\.storage\.session\.set/);
+});
