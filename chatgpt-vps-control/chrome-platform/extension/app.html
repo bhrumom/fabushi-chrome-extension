@@ -63,6 +63,7 @@
               <div class="run-statuses">
                 <span id="agent-transport-state" class="pill">coordinator unavailable</span>
                 <span id="agent-run-state" class="run-state" data-phase="recovering">recovering</span>
+                <button id="agent-reconnect-runtime" class="secondary-button context-action" type="button">Reconnect</button>
               </div>
             </div>
 
@@ -154,7 +155,10 @@
           <article><span class="setting-icon">F</span><div><h3>Fabushi 账号</h3><p id="browser-account-detail">登录后，官方 MCP 只会发现同一账号下的这个 Chrome。</p></div><button id="browser-account-action" type="button">登录 Fabushi</button></article>
           <article><span class="setting-icon">◎</span><div><h3>统一安装更新器</h3><p>市场版本、GitHub 来源、SHA-256 校验和安装状态由同一条合同管理；油猴脚本仍可独立运行。</p></div><span id="settings-auth" class="pill">可用</span></article>
           <article><span class="setting-icon">⇄</span><div><h3>官方 MCP 浏览器直连</h3><p>完整 Bridge 命令、CDP、下载与标签页生命周期由这个插件提供。</p></div><span id="settings-browser" class="pill">检查中</span></article>
-          <article><span class="setting-icon">⚙</span><div><h3>可选桌面增强</h3><p>连接后可共享账户、聊天和计算机控制；未安装或未启动桌面端不影响 Chrome 脚本。</p></div><button id="settings-open-desktop" type="button">打开桌面设置</button></article>
+          <article><span class="setting-icon">⚙</span><div><h3>可选本地 Runtime</h3><p>Native Messaging 只是 Coordinator 的一个 transport；没有桌面端时，已配置的远程 Runtime 仍可承载 Agent。</p></div><button id="settings-open-desktop" type="button">打开本地设置</button></article>
+          <article><span class="setting-icon">?</span><div><h3>Help</h3><p>查看完整扩展、Browser Control、Agent Runtime 与恢复说明。</p></div><button id="settings-help" type="button">Documentation</button></article>
+          <article><span class="setting-icon">i</span><div><h3>About</h3><p id="settings-about-version">Fabushi Chrome</p></div><span class="pill">Grok-shaped</span></article>
+          <article><span class="setting-icon">!</span><div><h3>Feedback</h3><p>报告扩展问题时请附版本、source SHA、复现步骤；不要附密码、token 或 Cookie。</p></div><button id="settings-feedback" type="button">Report issue</button></article>
         </div>
       </section>
     </main>
