@@ -88,6 +88,9 @@ function entryRole(entry) {
 }
 
 function entryKind(entry) {
+  const messageType = textValue(entry?.message?.type).toLowerCase();
+  if (messageType === "local-tool-permission" || messageType === "auto-review-approval") return "approval";
+  if (messageType === "widget" || messageType === "connector" || messageType === "connectors") return "interactive";
   const raw = textValue(entry?.kind || entry?.type || entry?.message?.type).toLowerCase();
   if (raw.includes("tool") || raw.includes("permission")) return "tool";
   if (raw.includes("think")) return "thinking";
@@ -194,6 +197,99 @@ export function createAgentWorkspace({ showBanner, hideBanner }) {
     }
   }
 
+  function approvalActions(node, actions) {
+    const group = document.createElement("div");
+    group.className = "transcript-actions";
+    for (const action of actions) group.append(actionButton(action.label, action.handler, { danger: action.danger, disabled: action.disabled }));
+    node.append(group);
+  }
+
+  function renderApprovalEntry(node, entry) {
+    const message = entry?.message || {};
+    if (message.type === "local-tool-permission") {
+      const ask = message.ask || {};
+      const title = document.createElement("strong");
+      title.textContent = "Allow this Agent to use a local tool?";
+      const detail = document.createElement("span");
+      detail.textContent = ask.status === "pending"
+        ? "This action runs through the Host permission boundary."
+        : `Permission request: ${textValue(ask.status) || "settled"}`;
+      node.append(title, detail);
+      if (ask.status === "pending" && state.activeAgentId && entry.id && ask.requestId) {
+        approvalActions(node, [
+          {
+            label: "Allow once",
+            handler: () => void resolveLocalToolPermission(entry, "allow-once"),
+          },
+          {
+            label: "Deny",
+            danger: true,
+            handler: () => void resolveLocalToolPermission(entry, "deny"),
+          },
+        ]);
+      }
+      return;
+    }
+
+    const approval = message.approval || {};
+    const title = document.createElement("strong");
+    title.textContent = approval.surface === "mcp"
+      ? "The Agent wants to use a connected service"
+      : approval.surface === "host_shell" || approval.surface === "box_shell"
+        ? "The Agent wants to run a command"
+        : "Approval required";
+    const detail = document.createElement("span");
+    detail.textContent = textValue(approval.reason || approval.summary) || "Review this action before continuing.";
+    node.append(title, detail);
+    if (approval.status === "pending" && state.activeAgentId && entry.id && approval.requestId) {
+      approvalActions(node, [
+        {
+          label: "Allow once",
+          handler: () => void resolveAutoReviewApproval(entry, "approved"),
+        },
+        {
+          label: "Deny",
+          danger: true,
+          handler: () => void resolveAutoReviewApproval(entry, "denied"),
+        },
+      ]);
+    }
+  }
+
+  function renderInteractiveEntry(node, entry) {
+    const message = entry?.message || {};
+    if (message.type === "widget") {
+      const prompt = document.createElement("strong");
+      prompt.textContent = textValue(message.widget?.prompt) || "Choose an option";
+      node.append(prompt);
+      const options = Array.isArray(message.widget?.options) ? message.widget.options : [];
+      if (!entry.respondedValue && options.length) {
+        approvalActions(node, options.slice(0, 6).flatMap((option) => {
+          const label = textValue(option?.label);
+          if (!label) return [];
+          return [{
+            label,
+            danger: option?.style === "danger",
+            handler: () => void respondToWidget(entry, textValue(option.value) || label),
+          }];
+        }));
+      } else if (entry.respondedValue) {
+        const status = document.createElement("span");
+        status.textContent = `Selected: ${entry.respondedValue}`;
+        node.append(status);
+      }
+      return;
+    }
+
+    const title = document.createElement("strong");
+    title.textContent = message.type === "connectors" ? "Connectors" : `Connector: ${textValue(message.connector) || "service"}`;
+    const detail = document.createElement("span");
+    detail.textContent = message.type === "connectors"
+      ? (Array.isArray(message.connectors) ? message.connectors.join(", ") : "Connector options")
+      : textValue(message.reason) || "Connection action available through the Agent runtime.";
+    node.append(title, detail);
+  }
+
   function renderEntries() {
     if (!messages) return;
     messages.replaceChildren();
@@ -207,6 +303,10 @@ export function createAgentWorkspace({ showBanner, hideBanner }) {
       const copy = entryText(entry);
       if (kind === "thinking") {
         node.textContent = copy || "Thinking…";
+      } else if (kind === "approval") {
+        renderApprovalEntry(node, entry);
+      } else if (kind === "interactive") {
+        renderInteractiveEntry(node, entry);
       } else if (kind === "tool") {
         const label = document.createElement("strong");
         label.textContent = textValue(entry.toolName || entry.name || entry.message?.name) || "Tool";
