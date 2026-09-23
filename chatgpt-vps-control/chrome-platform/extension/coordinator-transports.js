@@ -52,6 +52,12 @@ function remoteAdapter(provider) {
       if (typeof remote.discardAttachment !== "function") return null;
       return remote.discardAttachment(envelope);
     },
+    browserToolResult(envelope) {
+      if (typeof remote.browserToolResult !== "function") {
+        throw new CoordinatorTransportError("browser-runner-unsupported", "Remote Coordinator transport does not accept Browser Runner results.", "not-sent", "remote");
+      }
+      return remote.browserToolResult(envelope);
+    },
   };
 }
 
@@ -88,6 +94,9 @@ function nativeAdapter(nativeRequest) {
     },
     discardAttachment(envelope) {
       return nativeRequest("coordinator.attachment.discard", envelope, 15_000);
+    },
+    browserToolResult(envelope) {
+      return nativeRequest("coordinator.browserToolResult", envelope, 30_000);
     },
   };
 }
@@ -216,6 +225,22 @@ export function createCoordinatorTransportRouter({
         throw new CoordinatorTransportError(
           "attachment-discard-failed",
           `${status.kind} Coordinator attachment discard failed: ${error?.message || String(error)}`,
+          "not-sent",
+          status.kind
+        );
+      }
+    },
+
+    async browserToolResult({ clientId, result }) {
+      const { status, adapter } = await current();
+      try {
+        const value = await adapter.browserToolResult(envelope(clientId, { result }));
+        return { transport: status, value };
+      } catch (error) {
+        if (error instanceof CoordinatorTransportError) throw error;
+        throw new CoordinatorTransportError(
+          "browser-runner-result-failed",
+          `${status.kind} Coordinator rejected Browser Runner result: ${error?.message || String(error)}`,
           "not-sent",
           status.kind
         );
