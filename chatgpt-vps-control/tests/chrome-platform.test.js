@@ -19,8 +19,8 @@ test("Fabushi Chrome platform includes the product shell, browser bridge, and in
   const manifest = JSON.parse(await source("manifest.json"));
   assert.equal(manifest.manifest_version, 3);
   assert.equal(manifest.name, "Fabushi");
-  assert.equal(manifest.version, "0.6.22");
-  assert.equal(manifest.action.default_popup, "app.html");
+  assert.equal(manifest.version, "0.7.0");
+  assert.equal(manifest.action.default_popup, undefined);
   assert.equal(manifest.background.service_worker, "service-worker.js");
   for (const permission of ["debugger", "nativeMessaging", "power", "downloads", "tabs", "tabGroups", "webNavigation", "scripting", "userScripts", "storage", "alarms"]) assert.ok(manifest.permissions.includes(permission), permission);
   assert.deepEqual(manifest.host_permissions, ["<all_urls>"]);
