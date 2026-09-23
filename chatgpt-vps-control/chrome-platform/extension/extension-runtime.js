@@ -94,6 +94,38 @@ export function createExtensionPlatformRuntime() {
       return runtimeMessage({ type: "fabushi.account.status" }, 15_000);
     },
 
+    async stageAttachment(file) {
+      if (!(file instanceof File)) throw new TypeError("stageAttachment requires a File.");
+      const attachmentId = crypto.randomUUID();
+      const bytes = new Uint8Array(await file.arrayBuffer());
+      let binary = "";
+      const chunkSize = 0x8000;
+      for (let offset = 0; offset < bytes.length; offset += chunkSize) {
+        binary += String.fromCharCode(...bytes.subarray(offset, Math.min(bytes.length, offset + chunkSize)));
+      }
+      const response = await checked({
+        type: "fabushi.agent.attachment.stage",
+        clientId,
+        attachment: {
+          attachmentId,
+          name: file.name,
+          mimeType: file.type || "application/octet-stream",
+          size: file.size,
+          bytesBase64: btoa(binary),
+        },
+      }, 90_000);
+      return { attachmentId, ...response };
+    },
+
+    async discardAttachment({ attachmentId, reference = "" }) {
+      return checked({
+        type: "fabushi.agent.attachment.discard",
+        clientId,
+        attachmentId: String(attachmentId || ""),
+        reference: String(reference || ""),
+      }, 20_000);
+    },
+
     subscribe(listener) {
       listeners.add(listener);
       return () => listeners.delete(listener);
