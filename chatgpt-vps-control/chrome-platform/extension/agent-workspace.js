@@ -118,6 +118,10 @@ export function createAgentWorkspace({ showBanner, hideBanner }) {
     channels: { status: "idle", manifests: [], connections: [], error: "" },
     account: { loggedIn: false, loggingIn: false, connected: false, account: null, error: "" },
     browser: { connected: false, tabs: [] },
+    asyncTasks: { status: "idle", items: [], error: "" },
+    outline: { status: "idle", items: [], error: "" },
+    workflows: { status: "idle", items: [], error: "" },
+    automations: { status: "idle", items: [], error: "" },
     attachments: [],
     inFlightRequestId: "",
     refreshTimer: null,
@@ -140,6 +144,10 @@ export function createAgentWorkspace({ showBanner, hideBanner }) {
   const channelList = $("#agent-channel-list");
   const accountStatus = $("#agent-account-status");
   const browserList = $("#agent-browser-context");
+  const asyncTasksList = $("#agent-async-tasks");
+  const outlineList = $("#agent-conversation-outline");
+  const workflowsList = $("#agent-workflows");
+  const automationsList = $("#agent-automations");
   const agentName = $("#agent-name-input");
   const stopButton = $("#stop-run");
   const composer = $("#composer");
