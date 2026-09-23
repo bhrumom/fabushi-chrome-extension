@@ -133,6 +133,7 @@ export function createAgentWorkspace({ showBanner, hideBanner }) {
   const avatar = $("#agent-avatar");
   const runState = $("#agent-run-state");
   const transportState = $("#agent-transport-state");
+  const reconnectButton = $("#agent-reconnect-runtime");
   const mcpList = $("#agent-mcp-list");
   const pluginStatus = $("#agent-plugin-status");
   const channelList = $("#agent-channel-list");
@@ -1287,8 +1288,39 @@ export function createAgentWorkspace({ showBanner, hideBanner }) {
     }
   }
 
+  async function reconnectRuntime() {
+    state.phase = "recovering";
+    renderPhase();
+    if (reconnectButton) reconnectButton.disabled = true;
+    try {
+      const attached = await runtime.attach(state.activeAgentId);
+      state.transport = attached.transport || state.transport;
+      if (attached.cursor?.activeAgentId && attached.cursor.activeAgentId !== state.activeAgentId) {
+        state.activeAgentId = attached.cursor.activeAgentId;
+      }
+      state.phase = attached.cursor?.runPhase || (state.transport.connected ? "accepted" : "recovering");
+      hideBanner?.();
+      await Promise.allSettled([
+        refreshRoster(),
+        refreshMcp(),
+        refreshPluginStatus(),
+        refreshChannels(),
+        refreshAccount(),
+        refreshBrowser(),
+      ]);
+    } catch (error) {
+      state.transport = { ...state.transport, connected: false, error: error?.message || String(error) };
+      state.phase = "recovering";
+      showBanner?.(error?.message || String(error), "error");
+    } finally {
+      if (reconnectButton) reconnectButton.disabled = false;
+      renderPhase();
+    }
+  }
+
   function bind() {
     $("#new-chat")?.addEventListener("click", () => void createAgent());
+    reconnectButton?.addEventListener("click", () => void reconnectRuntime());
 
     composer?.addEventListener("submit", (event) => {
       event.preventDefault();
@@ -1348,6 +1380,12 @@ export function createAgentWorkspace({ showBanner, hideBanner }) {
 
     async refresh() {
       await Promise.allSettled([refreshRoster(), refreshMcp(), refreshPluginStatus(), refreshChannels(), refreshAccount(), refreshBrowser()]);
+    },
+
+    reconnect: reconnectRuntime,
+
+    async createAgent() {
+      await createAgent();
     },
 
     setFilter(value) {
