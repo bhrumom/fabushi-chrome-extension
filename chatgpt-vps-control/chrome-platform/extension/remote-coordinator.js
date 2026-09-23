@@ -191,9 +191,16 @@ export function createRemoteCoordinatorTransport({
     if (ready && socket?.readyState === WebSocket.OPEN) {
       return { connected: true, protocolVersion: COORDINATOR_PROTOCOL_VERSION };
     }
-    await connect();
+    const connecting = await connect();
     if (ready && socket?.readyState === WebSocket.OPEN) {
       return { connected: true, protocolVersion: COORDINATOR_PROTOCOL_VERSION };
+    }
+    if (!connecting) {
+      return {
+        connected: false,
+        protocolVersion: COORDINATOR_PROTOCOL_VERSION,
+        error: lastError || "Remote Coordinator is unavailable.",
+      };
     }
     if (statusWaiter) return statusWaiter.promise;
 
