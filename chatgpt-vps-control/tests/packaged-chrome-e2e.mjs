@@ -199,18 +199,67 @@ async function textContent(sessionId, selector) {
   return (await evaluate(sessionId, `document.querySelector(${JSON.stringify(selector)})?.textContent || ""`)).value || "";
 }
 
-async function waitNative(page) {
-  await evaluate(page.sessionId, `new Promise((resolve) => {
+async function extensionMessage(page, payload) {
+  return (await evaluate(page.sessionId, `new Promise((resolve) => {
     try {
-      const maybe = chrome.runtime.sendMessage({type:"fabushi.platform.reconnect"}, (response) => resolve(response ?? true));
-      if (maybe && typeof maybe.then === "function") maybe.then(resolve, () => resolve(false));
-    } catch {
-      resolve(false);
+      let settled = false;
+      const finish = (response) => {
+        if (settled) return;
+        settled = true;
+        resolve({
+          response: response ?? null,
+          error: chrome.runtime.lastError?.message || ""
+        });
+      };
+      const maybe = chrome.runtime.sendMessage(${JSON.stringify(payload)}, finish);
+      if (maybe && typeof maybe.then === "function") {
+        maybe.then(
+          (response) => finish(response),
+          (error) => {
+            if (settled) return;
+            settled = true;
+            resolve({ response: null, error: error?.message || String(error) });
+          }
+        );
+      }
+    } catch (error) {
+      resolve({ response: null, error: error?.message || String(error) });
     }
-  })`);
-  await evaluate(page.sessionId, `document.querySelector("#agent-reconnect-runtime")?.click(); true`);
-  await waitFor(async () => (await textContent(page.sessionId, "#agent-transport-state")).includes("native connected"), "native Coordinator connection", 25_000);
-  await waitFor(async () => (await textContent(page.sessionId, "#chat-list")).includes("Packaged Agent"), "Agent roster", 25_000);
+  })`)).value || {};
+}
+
+async function waitNative(page) {
+  const deadline = Date.now() + 35_000;
+  let lastPlatform = {};
+  let lastUiState = "";
+  let lastDesktopState = "";
+
+  while (Date.now() < deadline) {
+    await extensionMessage(page, { type: "fabushi.platform.reconnect" });
+    await sleep(150);
+    lastPlatform = await extensionMessage(page, { type: "fabushi.platform.status" });
+
+    if (lastPlatform.response?.connected === true) {
+      await evaluate(page.sessionId, `document.querySelector("#agent-reconnect-runtime")?.click(); true`);
+      await sleep(150);
+    }
+
+    lastUiState = await textContent(page.sessionId, "#agent-transport-state");
+    lastDesktopState = await textContent(page.sessionId, "#desktop-state");
+    if (lastUiState.includes("native connected")) {
+      await waitFor(
+        async () => (await textContent(page.sessionId, "#chat-list")).includes("Packaged Agent"),
+        "Agent roster",
+        25_000
+      );
+      return;
+    }
+    await sleep(200);
+  }
+
+  throw new Error(
+    `Timed out waiting for native Coordinator connection; platform=${JSON.stringify(lastPlatform)}; ui=${JSON.stringify(lastUiState)}; desktop=${JSON.stringify(lastDesktopState)}`
+  );
 }
 
 async function exampleTabCount(page) {
