@@ -265,7 +265,7 @@ async function logout() {
   await setSession(null);
   await chrome.storage.session.remove(LOGIN_KEY);
   await chrome.alarms.clear(LOGIN_ALARM);
-  await Promise.allSettled([...activeCalls]);
+  await Promise.allSettled([...activeCalls.values()]);
   await globalThis.__fabushiBrowserRevokeClaims?.();
   return { loggedIn: false };
 }
