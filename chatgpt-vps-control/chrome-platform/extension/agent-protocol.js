@@ -194,7 +194,11 @@ export function mergeRunSnapshot(snapshot = {}, value = {}) {
     else fence.sequence = Math.max(fence.sequence, nextSequence);
   }
 
-  const phase = projectRunPhase("resync", value);
+  const staleSameGeneration = !runChanged
+    && !generationChanged
+    && Number.isSafeInteger(value.sequence)
+    && value.sequence < Number(snapshot.fence?.sequence || 0);
+  const phase = staleSameGeneration ? null : projectRunPhase("resync", value);
   return {
     ...snapshot,
     ...(phase ? { runPhase: phase } : {}),
