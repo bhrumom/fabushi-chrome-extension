@@ -1006,10 +1006,17 @@ export function createAgentWorkspace({ showBanner, hideBanner }) {
     if (conversation) conversation.hidden = !state.activeAgentId;
 
     state.channels = { status: state.activeAgentId ? "loading" : "idle", manifests: [], connections: [], error: "" };
+    state.asyncTasks = { status: state.activeAgentId ? "loading" : "idle", items: [], error: "" };
+    state.outline = { status: state.activeAgentId ? "loading" : "idle", items: [], error: "" };
+    state.workflows = { status: state.activeAgentId ? "loading" : "idle", items: [], error: "" };
+    state.automations = { status: state.activeAgentId ? "loading" : "idle", items: [], error: "" };
     renderRoster();
     renderContext();
     void runtime.setActiveAgent(state.activeAgentId).catch(() => {});
-    if (state.activeAgentId) void refreshChannels();
+    if (state.activeAgentId) {
+      void refreshChannels();
+      void refreshAgentInfo();
+    }
   }
 
   async function coordinatorCall(method, args = {}, options = {}) {
@@ -1484,6 +1491,15 @@ export function createAgentWorkspace({ showBanner, hideBanner }) {
       return;
     }
 
+    if (family === "async-tasks") {
+      if (!payload?.parentAgentId || payload.parentAgentId === state.activeAgentId) void refreshAsyncTasks();
+    }
+    if (family === "outline") {
+      if (!payload?.agentId || payload.agentId === state.activeAgentId) void refreshOutline();
+    }
+    if (String(family).includes("automation")) void refreshAutomations();
+    if (String(family).includes("workflow")) void refreshWorkflows();
+
     if (family === "client-side-tool-v2" || String(family).includes("tool")) {
       state.phase = "tool-running";
       renderPhase();
@@ -1661,6 +1677,7 @@ export function createAgentWorkspace({ showBanner, hideBanner }) {
         refreshMcp(),
         refreshPluginStatus(),
         refreshChannels(),
+        refreshAgentInfo(),
         refreshAccount(),
         refreshBrowser(),
       ]);
@@ -1711,7 +1728,7 @@ export function createAgentWorkspace({ showBanner, hideBanner }) {
     stopButton?.addEventListener("click", () => void cancelActive());
     $("#agent-save-name")?.addEventListener("click", () => void renameActiveAgent());
     $("#agent-delete")?.addEventListener("click", () => void deleteActiveAgent());
-    $("#agent-refresh-context")?.addEventListener("click", () => void Promise.allSettled([refreshMcp(), refreshPluginStatus(), refreshChannels(), refreshAccount(), refreshBrowser()]));
+    $("#agent-refresh-context")?.addEventListener("click", () => void Promise.allSettled([refreshMcp(), refreshPluginStatus(), refreshChannels(), refreshAgentInfo(), refreshAccount(), refreshBrowser()]));
   }
 
   return {
@@ -1731,11 +1748,11 @@ export function createAgentWorkspace({ showBanner, hideBanner }) {
       }
 
       renderPhase();
-      await Promise.allSettled([refreshRoster(), refreshMcp(), refreshPluginStatus(), refreshChannels(), refreshAccount(), refreshBrowser()]);
+      await Promise.allSettled([refreshRoster(), refreshMcp(), refreshPluginStatus(), refreshChannels(), refreshAgentInfo(), refreshAccount(), refreshBrowser()]);
     },
 
     async refresh() {
-      await Promise.allSettled([refreshRoster(), refreshMcp(), refreshPluginStatus(), refreshChannels(), refreshAccount(), refreshBrowser()]);
+      await Promise.allSettled([refreshRoster(), refreshMcp(), refreshPluginStatus(), refreshChannels(), refreshAgentInfo(), refreshAccount(), refreshBrowser()]);
     },
 
     reconnect: reconnectRuntime,
