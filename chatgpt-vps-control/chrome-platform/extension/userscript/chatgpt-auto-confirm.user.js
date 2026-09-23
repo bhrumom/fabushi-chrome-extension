@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ChatGPT 自动确认 · Fabushi
 // @namespace    https://fabushi.ombhrum.com/userscripts/chatgpt-auto-confirm
-// @version      2.9.63
+// @version      2.9.64
 // @description  独立单标签任务工作台：目标编排、单次任务、附件粘贴预览、授权识别、实时消息、内存感知与可中断调度。
 // @match        https://chatgpt.com/*
 // @match        https://chat.openai.com/*
@@ -16,7 +16,7 @@
   'use strict';
   if (window.top !== window.self) return;
   const INSTANCE = '__FABUSHI_AUTO_CONFIRM_INSTANCE__';
-  const VERSION = '2.9.63';
+  const VERSION = '2.9.64';
   const BOOTSTRAP_MARKER = 'fabushi-auto-confirm-bootstrap-v1';
   const previousInstance = window[INSTANCE];
   if (previousInstance?.version === VERSION && previousInstance?.active) return;
@@ -101,13 +101,17 @@
   // independent conversations continue server-side. Rotate inspection of
   // their durable /c/<id> URLs instead of holding the tab on one task.
   const SUPERVISION_INTERVAL_MS = 15000;
+  const VISIBLE_SCAN_INTERVAL_MS = 4000;
+  const HIDDEN_SCAN_INTERVAL_MS = 15000;
   const AUTO_START_RETRY_MS = 5000;
   const NAV_TICKET_TTL_MS = 10 * 60 * 1000;
   const SEND_CONFIRM_TIMEOUT_MS = 90000;
   const RATE_LIMIT_COOLDOWN_MS = 5 * 60 * 1000;
   const MIN_SEND_INTERVAL_MS = 60 * 1000;
-  const GLOBAL_APPROVAL_SCAN_MS = 1200;
-  const POPUP_DISMISS_SCAN_MS = 1000;
+  const GLOBAL_APPROVAL_SCAN_MS = 1500;
+  const HIDDEN_GLOBAL_APPROVAL_SCAN_MS = 8000;
+  const POPUP_DISMISS_SCAN_MS = 5000;
+  const HIDDEN_POPUP_DISMISS_SCAN_MS = 15000;
   // A full ChatGPT navigation creates a new document before the previous
   // document's Web Lock callback has necessarily unwound. Keep the persisted
   // tab identity while that handoff settles; only after the bounded window do
@@ -1533,9 +1537,21 @@
     }
     return runnable[0];
   }
+  function visibilityAwareDelay(ordinaryDelay, visibleMs, hiddenMs, hidden = document.hidden) {
+    const delayMs = Math.max(0, Number(ordinaryDelay) || 0);
+    // Preserve explicit short recovery deadlines while reducing ordinary work
+    // on background tabs, where Chrome may throttle timers anyway.
+    if (delayMs > 0 && delayMs < 4000) return delayMs;
+    return Math.max(delayMs, hidden ? hiddenMs : visibleMs);
+  }
+  function retainedPreparedComposer(task) {
+    if (!task?.attempted || !task?.preparedPrompt) return false;
+    const input = composer();
+    return Boolean(input && normalize(input.value || input.textContent) === normalize(task.preparedPrompt));
+  }
   function nextTaskWakeDelay(active, now = Date.now()) {
     const deadlines = active.map(item => taskDeferredUntil(item, now)).filter(Number.isFinite);
-    if (!deadlines.length) return 2000;
+    if (!deadlines.length) return VISIBLE_SCAN_INTERVAL_MS;
     return Math.max(100, Math.min(...deadlines) - now);
   }
   const text = node => normalize(node?.textContent);
@@ -3258,7 +3274,7 @@
     popupDismissTimer = setTimeout(() => {
       popupDismissTimer = null;
       try { if (running || data.globalAutoApprove) dismissUnexpectedModals(); } catch (error) { console.warn('[Fabushi] ChatGPT 弹窗检查暂未完成', error); }
-      schedulePopupDismissScan();
+      schedulePopupDismissScan(document.hidden ? HIDDEN_POPUP_DISMISS_SCAN_MS : POPUP_DISMISS_SCAN_MS);
     }, ms);
   }
   function checkAuthorizationRun(signal, queueOwned) {
@@ -3322,7 +3338,7 @@
       try { await processGlobalApprovalCards(); } catch (error) {
         if (error.message !== '已暂停') console.warn('[Fabushi] 全页面授权检查暂未完成', error);
       } finally {
-        scheduleGlobalApprovalScan();
+        scheduleGlobalApprovalScan(document.hidden ? HIDDEN_GLOBAL_APPROVAL_SCAN_MS : GLOBAL_APPROVAL_SCAN_MS);
       }
     }, ms);
   }
@@ -3616,6 +3632,20 @@ function stopAmbiguousSend(task, perform = true, now = Date.now()) {
     if (perform && currentConversationURL() !== boundURL) directNavigate(new URL(boundURL), task);
     return true;
   }
+  if (retainedPreparedComposer(task)) {
+    const firstObservation = !task.retainedComposerDraftNotedAt;
+    task.retainedComposerDraftSince ||= now;
+    if (task.state !== 'sending') task.state = 'sending';
+    if (firstObservation) {
+      task.retainedComposerDraftNotedAt = now;
+      task.updatedAt = now;
+      log(task, '发送后输入框仍保留本轮完整消息，发送结果存在歧义；已保留原发送标识并等待会话/消息标识出现，不会因 Stop 按钮缺失而新开会话重发。');
+      save();
+    }
+    return true;
+  }
+  task.retainedComposerDraftSince = 0;
+  task.retainedComposerDraftNotedAt = 0;
   const retryCount = Number(task.ambiguousFreshRetryCount || 0) + 1;
   clearDispatchIntent(task);
   task.ambiguousFreshRetryCount = retryCount;
@@ -4613,7 +4643,7 @@ function stopAmbiguousSend(task, perform = true, now = Date.now()) {
     if (syncRemoteControl()) return;
     busy = true;
     const signal = controller.signal;
-    let nextScheduleMs = 2000;
+    let nextScheduleMs = VISIBLE_SCAN_INTERVAL_MS;
     let task;
     try {
       const active = tabTasks().filter(item => !terminal.has(item.state) && item.state !== 'paused');
@@ -4741,7 +4771,7 @@ function stopAmbiguousSend(task, perform = true, now = Date.now()) {
       }
     } finally {
       busy = false;
-      if (!signal.aborted) schedule(document.hidden ? Math.max(4000, nextScheduleMs) : nextScheduleMs);
+      if (!signal.aborted) schedule(visibilityAwareDelay(nextScheduleMs, VISIBLE_SCAN_INTERVAL_MS, HIDDEN_SCAN_INTERVAL_MS));
     }
   }
   async function start(restorePaused = true) {
