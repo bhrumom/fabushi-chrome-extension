@@ -70,3 +70,15 @@ test("Grok-shaped workspace projects lifecycle MCP tools and Browser context", a
   assert.match(workspace, /sendPrompt/);
   assert.match(workspace, /client-side-tool-v2/);
 });
+
+
+test("app reload recovery reclaims the latest durable cursor and asks transport to resume it", async () => {
+  const broker = await source("agent-broker.js");
+  assert.match(broker, /latestRecoveryCursor/);
+  assert.match(broker, /recoverClient/);
+  assert.match(broker, /recoveredFromPreviousView/);
+  assert.match(broker, /coordinator\.resume/);
+  assert.match(broker, /runId:\s*cursor\.fence\?\.runId/);
+  assert.match(broker, /generation:\s*cursor\.fence\?\.generation/);
+  assert.match(broker, /sequence:\s*Number\(cursor\.fence\?\.sequence/);
+});
