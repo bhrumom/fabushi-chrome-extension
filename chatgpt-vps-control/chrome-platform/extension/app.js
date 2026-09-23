@@ -1,3 +1,4 @@
+import { createAgentWorkspace } from "./agent-workspace.js";
 import {
   compareMarketplaceVersions as compareVersions,
   marketplaceItemId,
@@ -13,7 +14,7 @@ import {
 } from "./marketplace-install.js";
 
 const views = ["chats", "miniapps", "marketplace", "browser", "settings"];
-const labels = { chats: "聊天", miniapps: "小程序", marketplace: "Marketplace", browser: "浏览器", settings: "设置" };
+const labels = { chats: "Agents", miniapps: "小程序", marketplace: "Marketplace", browser: "浏览器", settings: "设置" };
 const MARKETPLACE_API_ROOT = "https://api.ombhrum.com";
 const MARKETPLACE_USERSCRIPT_REPOSITORY = "https://github.com/bhrumom/fabushi-chatgpt-auto-confirm-userscript";
 const MARKETPLACE_USERSCRIPT_UPDATE_URL = "https://raw.githubusercontent.com/bhrumom/fabushi-chatgpt-auto-confirm-userscript/main/chatgpt-auto-confirm.user.js";
@@ -57,6 +58,7 @@ const accountName = $("#account-name");
 const accountDetail = $("#account-detail");
 const accountAvatar = $("#account-avatar");
 const search = $("#search");
+let agentWorkspace = null;
 
 function runtimeMessage(message, timeoutMs = 30_000) {
   return new Promise((resolve, reject) => {
@@ -152,11 +154,12 @@ function activateView(name) {
   $("#view-title").textContent = labels[name];
   for (const button of navButtons) button.toggleAttribute("aria-current", button.dataset.view === name);
   for (const view of views) $(`#${view}-view`).hidden = view !== name;
-  search.placeholder = name === "marketplace" ? "搜索 Marketplace" : name === "chats" ? "搜索聊天" : "搜索 Fabushi";
+  search.placeholder = name === "marketplace" ? "搜索 Marketplace" : name === "chats" ? "搜索 Agents" : "搜索 Fabushi";
   if (name === "marketplace") {
     void refreshMarketplace(search.value);
     void refreshMarketplaceUpdateStatus({ check: true });
   }
+  if (name === "chats") void agentWorkspace?.refresh();
   if (name === "miniapps") void refreshInstalled();
   if (name === "browser") void refreshBrowser();
 }
@@ -1162,7 +1165,7 @@ async function initialize() {
   // discovery. A slow Marketplace/API response must never leave every view
   // hidden or make the extension appear frozen during startup.
   loading.hidden = true;
-  activateView("marketplace");
+  activateView("chats");
   scheduleMarketplaceAutoRefresh();
   void Promise.allSettled([refreshUserscripts(), refreshBrowserAccount()]);
   void refreshMarketplaceUpdateStatus({ check: true });
@@ -1197,28 +1200,8 @@ $("#marketplace-refresh").addEventListener("click", async (event) => {
     button.disabled = false;
   }
 });
-$("#new-chat").addEventListener("click", () => {
-  state.activeConversationId = "new";
-  $("#conversation-empty").hidden = true;
-  $("#conversation").hidden = false;
-  $("#conversation-title").textContent = "新对话";
-  state.messages.set("new", []);
-  renderMessages();
-  $("#composer-input").focus();
-});
-$("#composer").addEventListener("submit", (event) => {
-  event.preventDefault();
-  const input = $("#composer-input");
-  const text = input.value.trim();
-  if (!text || !state.auth.loggedIn) return;
-  input.value = "";
-  const conversationId = state.activeConversationId === "new" ? undefined : state.activeConversationId || undefined;
-  appendMessage(state.activeConversationId || "new", { role: "user", text });
-  void desktopRequest("feature.execute", { command: { type: "chat.send", requestId: requestId("chat-send"), text, conversationId, agentId: conversationId ? undefined : "mahayana-assistant", mode: "agent" } })
-    .catch((error) => showBanner(error.message, "error"));
-});
 search.addEventListener("input", () => {
-  if (state.view === "chats") renderConversations(search.value);
+  if (state.view === "chats") agentWorkspace?.setFilter(search.value);
   if (state.view === "marketplace") void refreshMarketplace(search.value);
 });
 $("#import-userscript").addEventListener("change", async (event) => {
@@ -1246,7 +1229,7 @@ document.addEventListener("keydown", (event) => {
   }
 });
 chrome.runtime.onMessage.addListener((message) => {
-  if (message?.type === "fabushi.platform.event") handlePlatformEvent(message.event);
+  if (message?.type === "fabushi.platform.event") agentWorkspace?.handleLegacyPlatformEvent(message.event);
   if (message?.type === "fabushi.marketplace.updates" && message.status) {
     setMarketplaceUpdateStatus(message.status);
     if (message.status.applied?.length) void refreshUserscripts();
@@ -1258,4 +1241,6 @@ chrome.runtime.onMessage.addListener((message) => {
   }
 });
 
+agentWorkspace = createAgentWorkspace({ desktopRequest, showBanner, hideBanner });
+void agentWorkspace.start();
 await initialize();
