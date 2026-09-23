@@ -159,7 +159,10 @@ const hostManifest = {
 };
 
 const hostDirs = [
+  join(profile, "NativeMessagingHosts"),
+  join(profile, "Default", "NativeMessagingHosts"),
   join(homedir(), ".config", "google-chrome", "NativeMessagingHosts"),
+  join(homedir(), ".config", "google-chrome-for-testing", "NativeMessagingHosts"),
   join(homedir(), ".config", "chromium", "NativeMessagingHosts")
 ];
 for (const directory of hostDirs) {
