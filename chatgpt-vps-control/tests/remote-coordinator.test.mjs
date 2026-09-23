@@ -60,10 +60,10 @@ function latestSocket() {
   return FakeWebSocket.instances.at(-1);
 }
 
-async function waitForSocket() {
+async function waitForSocket(previous = null) {
   for (let attempt = 0; attempt < 40; attempt += 1) {
     const socket = latestSocket();
-    if (socket) return socket;
+    if (socket && socket !== previous) return socket;
     await new Promise((resolve) => setImmediate(resolve));
   }
   return null;
@@ -175,7 +175,7 @@ test("remote Coordinator never automatically resends an unknown-delivery request
   );
 
   const reconnectPromise = transport.reconnect();
-  const next = await waitForSocket();
+  const next = await waitForSocket(socket);
   assert.ok(next);
   assert.notEqual(next, socket);
   next.open();
