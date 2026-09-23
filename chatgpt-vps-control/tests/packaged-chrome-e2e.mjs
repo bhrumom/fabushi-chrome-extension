@@ -131,28 +131,52 @@ async function readState() {
 }
 
 let stderr = "";
-const child = spawn(chromeBin, [
-  "--no-sandbox",
-  "--disable-gpu",
-  "--disable-dev-shm-usage",
-  "--no-first-run",
-  "--no-default-browser-check",
-  "--disable-background-networking",
-  "--disable-component-update",
-  "--disable-sync",
-  "--metrics-recording-only",
-  `--user-data-dir=${profile}`,
-  "--enable-unsafe-extension-debugging",
-  "--remote-debugging-pipe",
-  "about:blank"
-], {
-  stdio: ["ignore", "ignore", "pipe", "pipe", "pipe"],
-  env: { ...process.env, FABUSHI_E2E_STATE: statePath }
-});
-child.stderr.setEncoding("utf8");
-child.stderr.on("data", (chunk) => { stderr += chunk; });
+let child = null;
+let cdp = null;
 
-const cdp = new CdpPipe(child);
+function launchChrome({ loadExtension = false } = {}) {
+  const args = [
+    "--no-sandbox",
+    "--disable-gpu",
+    "--disable-dev-shm-usage",
+    "--no-first-run",
+    "--no-default-browser-check",
+    "--disable-background-networking",
+    "--disable-component-update",
+    "--disable-sync",
+    "--metrics-recording-only",
+    `--user-data-dir=${profile}`,
+    "--enable-unsafe-extension-debugging",
+    ...(loadExtension ? [
+      `--disable-extensions-except=${extensionDir}`,
+      `--load-extension=${extensionDir}`,
+    ] : []),
+    "--remote-debugging-pipe",
+    "about:blank"
+  ];
+  child = spawn(chromeBin, args, {
+    stdio: ["ignore", "ignore", "pipe", "pipe", "pipe"],
+    env: { ...process.env, FABUSHI_E2E_STATE: statePath }
+  });
+  child.stderr.setEncoding("utf8");
+  child.stderr.on("data", (chunk) => { stderr += chunk; });
+  cdp = new CdpPipe(child);
+}
+
+async function stopChrome() {
+  const running = child;
+  if (!running) return;
+  if (running.exitCode == null && running.signalCode == null) running.kill("SIGTERM");
+  await Promise.race([
+    new Promise((resolvePromise) => running.once("exit", resolvePromise)),
+    sleep(3_000)
+  ]);
+  if (running.exitCode == null && running.signalCode == null) running.kill("SIGKILL");
+  child = null;
+  cdp = null;
+}
+
+launchChrome();
 
 async function targets() {
   return (await cdp.send("Target.getTargets")).targetInfos || [];
@@ -359,6 +383,13 @@ try {
     await writeFile(join(directory, "com.fabushi.chrome_platform.json"), JSON.stringify(hostManifest, null, 2) + "\n");
   }
 
+  // Chrome resolves Native Messaging hosts at browser-process scope. Restart
+  // only after the exact extension ID is known and its allow-listed host
+  // manifest is on disk; the second browser still loads the same verify/
+  // package directory and the app verifies chrome.runtime.id below.
+  await stopChrome();
+  launchChrome({ loadExtension: true });
+
   let page = await openApp(extensionId);
   await waitNative(page);
 
@@ -417,14 +448,7 @@ try {
     phase: await textContent(page.sessionId, "#agent-run-state")
   }));
 } finally {
-  child.kill("SIGTERM");
-  await Promise.race([
-    new Promise((resolvePromise) => child.once("exit", resolvePromise)),
-    sleep(3_000)
-  ]);
-  if (child.exitCode == null) child.kill("SIGKILL");
+  await stopChrome();
   if (process.env.FABUSHI_KEEP_E2E_TEMP !== "1") await rm(temp, { recursive: true, force: true });
-  if (child.exitCode && child.exitCode !== 0) {
-    process.stderr.write(stderr.slice(-12_000));
-  }
+  if (stderr) process.stderr.write(stderr.slice(-12_000));
 }
