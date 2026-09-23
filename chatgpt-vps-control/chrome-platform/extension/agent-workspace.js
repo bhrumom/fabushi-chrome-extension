@@ -493,6 +493,10 @@ export function createAgentWorkspace({ showBanner, hideBanner }) {
   }
 
   function renderContext() {
+    renderAccount();
+    renderPlugins();
+    renderChannels();
+
     if (mcpList) {
       mcpList.replaceChildren();
       const shown = state.mcp.slice(0, 12);
