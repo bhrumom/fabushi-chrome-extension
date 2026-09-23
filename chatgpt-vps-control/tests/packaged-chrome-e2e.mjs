@@ -187,6 +187,36 @@ async function extensionWorker(extensionId) {
   return infos.find((target) => target.type === "service_worker" && target.url.startsWith(prefix));
 }
 
+async function extensionIdFromManager() {
+  const created = await cdp.send("Target.createTarget", { url: "chrome://extensions/" });
+  const attached = await cdp.send("Target.attachToTarget", { targetId: created.targetId, flatten: true });
+  const sessionId = attached.sessionId;
+  await cdp.send("Runtime.enable", {}, sessionId);
+  await cdp.send("Page.enable", {}, sessionId);
+  try {
+    await waitFor(
+      async () => (await evaluate(sessionId, "document.readyState")).value === "complete",
+      "chrome extensions manager load",
+      10_000
+    );
+    return await waitFor(async () => {
+      const result = (await evaluate(sessionId, `(() => {
+        const manager = document.querySelector("extensions-manager");
+        const list = manager?.shadowRoot?.querySelector("extensions-item-list");
+        const items = [...(list?.shadowRoot?.querySelectorAll("extensions-item") || [])];
+        return items.map((item) => ({
+          id: item.id || item.data?.id || "",
+          name: item.data?.name || item.shadowRoot?.querySelector("#name")?.textContent?.trim() || ""
+        }));
+      })()`)).value || [];
+      const fabushi = result.find((item) => item?.name === "Fabushi");
+      return fabushi?.id || "";
+    }, "Fabushi in chrome://extensions", 15_000, 250);
+  } finally {
+    await cdp.send("Target.closeTarget", { targetId: created.targetId }).catch(() => {});
+  }
+}
+
 async function openApp(extensionId) {
   const url = `chrome-extension://${extensionId}/app.html`;
   const created = await cdp.send("Target.createTarget", { url });
@@ -309,7 +339,12 @@ async function exampleTabCount(page) {
 }
 
 try {
-  const extensionId = await waitFor(extensionIdFromProfile, "installed unpacked extension ID", 25_000);
+  let extensionId = "";
+  try {
+    extensionId = await extensionIdFromManager();
+  } catch {
+    extensionId = await waitFor(extensionIdFromProfile, "installed unpacked extension ID", 10_000);
+  }
   assert.match(extensionId, /^[a-p]{32}$/);
 
   const hostManifest = {
