@@ -90,6 +90,7 @@ function entryRole(entry) {
 function entryKind(entry) {
   const messageType = textValue(entry?.message?.type).toLowerCase();
   if (messageType === "local-tool-permission" || messageType === "auto-review-approval") return "approval";
+  if (messageType === "secret-request") return "secret";
   if (messageType === "widget" || messageType === "connector" || messageType === "connectors") return "interactive";
   const raw = textValue(entry?.kind || entry?.type || entry?.message?.type).toLowerCase();
   if (raw.includes("tool") || raw.includes("permission")) return "tool";
@@ -256,6 +257,45 @@ export function createAgentWorkspace({ showBanner, hideBanner }) {
     }
   }
 
+  function renderSecretEntry(node, entry) {
+    const request = entry?.message?.secretRequest || {};
+    const title = document.createElement("strong");
+    title.textContent = textValue(request.label) || "Secret required";
+    const description = document.createElement("span");
+    description.textContent = entry.secretProvided === true
+      ? "Provided securely to the Agent runtime."
+      : textValue(request.description) || "This value is sent directly to the Coordinator and is not stored by the extension UI.";
+    node.append(title, description);
+
+    if (entry.secretProvided === true || !state.activeAgentId || !entry.id) return;
+
+    const form = document.createElement("form");
+    form.className = "secret-request-form";
+    const input = document.createElement("input");
+    input.type = "password";
+    input.autocomplete = "off";
+    input.spellcheck = false;
+    input.placeholder = textValue(request.label) || "Secret";
+    input.setAttribute("aria-label", textValue(request.label) || "Secret");
+
+    const submit = document.createElement("button");
+    submit.type = "submit";
+    submit.textContent = "Provide";
+
+    form.append(input, submit);
+    form.addEventListener("submit", (event) => {
+      event.preventDefault();
+      const value = input.value;
+      input.value = "";
+      if (!value.trim()) return;
+      submit.disabled = true;
+      void submitSecret(entry, value).finally(() => {
+        submit.disabled = false;
+      });
+    });
+    node.append(form);
+  }
+
   function renderInteractiveEntry(node, entry) {
     const message = entry?.message || {};
     if (message.type === "widget") {
@@ -322,6 +362,20 @@ export function createAgentWorkspace({ showBanner, hideBanner }) {
     }
   }
 
+  async function submitSecret(entry, value) {
+    if (!state.activeAgentId || !entry?.id || !String(value || "").trim()) return;
+    try {
+      await coordinatorCall("submitSecret", {
+        entryId: entry.id,
+        value: String(value),
+        agentId: state.activeAgentId,
+      }, { timeoutMs: 30_000 });
+      await refreshTranscript();
+    } catch (error) {
+      showBanner?.(error?.message || String(error), "error");
+    }
+  }
+
   async function respondToWidget(entry, value) {
     if (!state.activeAgentId || !entry?.id || !String(value || "").trim()) return;
     try {
@@ -365,6 +419,8 @@ export function createAgentWorkspace({ showBanner, hideBanner }) {
         node.textContent = copy || "Thinking…";
       } else if (kind === "approval") {
         renderApprovalEntry(node, entry);
+      } else if (kind === "secret") {
+        renderSecretEntry(node, entry);
       } else if (kind === "interactive") {
         renderInteractiveEntry(node, entry);
       } else if (kind === "tool") {
