@@ -69,6 +69,15 @@ async function waitForSocket(previous = null) {
   return null;
 }
 
+async function waitForFrame(socket, predicate) {
+  for (let attempt = 0; attempt < 80; attempt += 1) {
+    const frame = socket.sent.find(predicate);
+    if (frame) return frame;
+    await new Promise((resolve) => setImmediate(resolve));
+  }
+  return null;
+}
+
 async function readyTransport(factory) {
   const transport = factory({
     url: "wss://fabushi-mcp.ombhrum.com/coordinator",
@@ -112,7 +121,8 @@ test("remote Coordinator call reply event and resume use the typed v1 protocol",
     method: "listAgents",
     args: {},
   });
-  assert.deepEqual(socket.sent.at(-1), {
+  const callFrame = await waitForFrame(socket, (frame) => frame.requestId === "req-1");
+  assert.deepEqual(callFrame, {
     kind: "request",
     requestId: "req-1",
     method: "listAgents",
@@ -136,7 +146,8 @@ test("remote Coordinator call reply event and resume use the typed v1 protocol",
     generation: "g1",
     sequence: 7,
   });
-  const resumeFrame = socket.sent.at(-1);
+  const resumeFrame = await waitForFrame(socket, (frame) => frame.kind === "request" && frame.method === "resume");
+  assert.ok(resumeFrame);
   assert.equal(resumeFrame.kind, "request");
   assert.equal(resumeFrame.method, "resume");
   assert.deepEqual(resumeFrame.args, {
@@ -164,6 +175,8 @@ test("remote Coordinator never automatically resends an unknown-delivery request
     method: "sendPrompt",
     args: { prompt: "hello" },
   });
+  const sentFrame = await waitForFrame(socket, (frame) => frame.requestId === "send-once");
+  assert.ok(sentFrame);
   assert.equal(socket.sent.filter((frame) => frame.requestId === "send-once").length, 1);
   socket.close(1006, "network lost");
 
