@@ -3,6 +3,7 @@ export const MEMORY_PLUGIN_ID = "chatgpt-auto-confirm";
 export const MEMORY_DISCARD_COOLDOWN_MS = 5 * 60 * 1000;
 
 const MAX_MEMORY_BYTES = 16 * 1024 * 1024 * 1024;
+const ELEVATED_DISCARD_MIN_BYTES = 1024 * 1024 * 1024;
 const CHATGPT_URL = /^https:\/\/(?:chatgpt\.com|chat\.openai\.com)(?:\/|$)/i;
 const PRESSURES = new Set(["normal", "elevated", "high", "unsupported"]);
 
@@ -50,8 +51,9 @@ export function validateMemoryRequest(message, { record, tab, cooldownRemaining 
   // result so the userscript can ask the user to switch away from it.
   if (tab.active === true) return { ok:true, discarded:false, reason:"active-tab", tabId };
   if (tab.discarded === true) return { ok:true, discarded:true, reason:"already-discarded", tabId };
-  if (!payload.userInitiated && payload.pressure !== "high") {
-    return { ok:true, discarded:false, reason:"pressure-not-high", tabId };
+  if (!payload.userInitiated && payload.pressure !== "high"
+    && !(payload.pressure === "elevated" && payload.usedBytes >= ELEVATED_DISCARD_MIN_BYTES)) {
+    return { ok:true, discarded:false, reason:"pressure-not-elevated", tabId };
   }
   if (payload.safeToDiscard !== true || payload.hasDraft || payload.hasPendingAttachment) {
     return { ok:true, discarded:false, reason:"unsafe-state", tabId };

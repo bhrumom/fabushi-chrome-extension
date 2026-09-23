@@ -9,7 +9,7 @@ Product builds, CI, Releases, and dependency boundaries are maintained here inde
 after the migration acceptance gates pass. Do not add credentials or source paths owned by
 another platform repository.
 
-Current browser release: `0.6.19`. The bundled ChatGPT userscript is `2.9.46` and declares
+Current browser release candidate: `0.6.20`. It bundles ChatGPT userscript `2.9.63` and declares
 stable Tampermonkey-style `@updateURL` / `@downloadURL` metadata. Marketplace remains the
 first-install/discovery surface; subsequent userscript releases are checked from that URL.
 
@@ -33,3 +33,7 @@ The host now bundles canonical userscript v2.9.44. After connection interruption
 ## 0.6.19 loading recovery + 15-minute stall refresh
 
 The host bundles canonical userscript v2.9.46. Same-route loading recovery now performs a real reload, cancelled/failed navigation re-arms the scheduler, and a no-unload watchdog prevents silent supervision stops. Generic unchanged-conversation refresh waits 15 minutes; unbound ambiguous-send recovery remains 3 minutes. Existing system keep-awake behavior is unchanged.
+
+## 0.6.20 same-chat recovery + memory-pressure discard
+
+The host bundles canonical userscript v2.9.63. When ChatGPT reports a connection interruption, the script continues in the same conversation and detects a completed response even when its own `继续完成所有` recovery draft is already present. The host accepts automatic elevated-pressure discard requests only at a JS heap estimate of at least 1 GiB; active tabs, unsafe workspaces, and requests inside the cooldown remain protected. Chrome unloads a discarded background tab and reloads it when selected; this does not clear memory from the active tab.
