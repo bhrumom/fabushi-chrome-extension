@@ -33,7 +33,7 @@ jobs:
         run: node scripts/check-grok-chrome-parity-ledger.mjs
 
       - name: Test Agent protocol and architecture boundaries
-        run: node --test chatgpt-vps-control/tests/agent-protocol.test.mjs chatgpt-vps-control/tests/grok-chrome-architecture.test.mjs
+        run: node --test chatgpt-vps-control/tests/agent-protocol.test.mjs chatgpt-vps-control/tests/coordinator-transports.test.mjs chatgpt-vps-control/tests/grok-chrome-architecture.test.mjs
 
       - name: Test preserved Chrome capabilities
         run: node --test chatgpt-vps-control/tests/preserved-capabilities.test.mjs chatgpt-vps-control/tests/host-resilience.test.mjs chatgpt-vps-control/tests/marketplace-install.test.js
