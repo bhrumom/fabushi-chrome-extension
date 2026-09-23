@@ -954,22 +954,40 @@ The Grok repository is an unofficial reconstruction. It is used as architecture,
 
 ## 26. Spec compliance record
 
+This table records implementation truth, not intent. A static/contract pass does not substitute for the packaged/live evidence required by the corresponding AC.
+
 | Requirement / AC | Status | Evidence / reason |
 | --- | --- | --- |
-| R-EXIST-001..006 | pending | Current baseline implements these capabilities; final Grok architecture must prove zero regression. |
-| R-UI-001..004 | pending | Current popup-oriented five-view shell is not full Grok UI parity. |
-| R-ARCH-001..006 | pending | Complete Grok-shaped runtime ownership is not yet proven. |
-| R-RUN-001..007 | pending | Durable same-run lifecycle/recovery is not yet proven. |
-| AC-1 | passed | Exact Grok reference pinned in this Spec. |
-| AC-2 | pending | 2,046-row Chrome parity ledger does not yet exist. |
-| AC-3..4 | pending | Product-responsibility closure has not been completed. |
-| AC-5..6 | pending | Current manifest still uses `action.default_popup = app.html`. |
-| AC-7..12 | pending | Coordinator/Host/Runner client boundaries and same-run recovery are incomplete. |
-| AC-13..15 | pending | Full Grok Agent/MCP/tool UI parity is incomplete. |
-| AC-16..23 | pending | Existing capabilities require final-architecture regression/security evidence. |
-| AC-24 | pending | Old shell is still the current production application. |
-| AC-25..26 | pending | Final exact-HEAD CI/package evidence does not exist for this architecture. |
-| AC-27 | pending | Grok Bot Chrome effect is not yet proven. |
-| AC-28 | pending | Final compliance review pending. |
+| R-EXIST-001..006 | pending | Browser Control/CDP/OOPIF/downloads, Mini Apps/Marketplace, userscripts, remote-update/LKG, account isolation, keep-awake and Native Messaging remain in the shipping worker and have contract gates. Final packaged regression coverage is still incomplete. |
+| R-UI-001..004 | pending | Toolbar now opens the full extension page and the Agent workspace includes roster, transcript/composer, lifecycle, waiting-user cards, attachments, MCP/plugins/connectors, account/runtime and Browser context. Normative visual/reference parity and all packaged journeys are not yet closed. |
+| R-ARCH-001..006 | pending | Renderer -> typed runtime -> MV3 broker -> unified native/remote Coordinator transport is implemented; Browser Runner is a separate generation-fenced capability. Production remote Coordinator service evidence is still missing. |
+| R-RUN-001..007 | pending | Stable request IDs, run/generation/sequence fencing, durable cursor recovery, no-resend on unknown delivery, Browser Runner replay protection and coordinator.resume exist. Packaged restart/reopen acceptance must be green on the final exact HEAD. |
+| AC-1 | passed | Exact Grok reference is pinned to `a9f633e09d49a85829b8236331b9e21f7e612634`. |
+| AC-2 | passed | `docs/architecture/grok-bot-0.18-chrome-extension-parity-ledger.json` contains exactly 2,046 unique pinned rows: 1,724 `source/**` and 322 `frontend/**`. |
+| AC-3..4 | pending | Ledger inventory is complete but most rows are still non-final. `scripts/check-grok-chrome-parity-ledger.mjs --final` now fails unless every row is `verified` or reviewed `not-applicable` with evidence. |
+| AC-5..6 | passed | Manifest no longer defines `action.default_popup`; `chrome.action.onClicked` opens/focuses `app.html` as a full extension page. |
+| AC-7..10 | pending | Ownership boundaries and recovery code/tests exist. Exact-HEAD packaged Chrome recovery E2E is required before passing these ACs. |
+| AC-11 | passed | Native and remote adapters expose the same Coordinator v1 status/call/cancel/resume envelope; production broker uses the unified router. |
+| AC-12 | blocked | Shipping remote client is implemented at `wss://fabushi-mcp.ombhrum.com/coordinator`, uses the existing short-lived worker-only account session, and has no-native contract coverage. No production Coordinator endpoint/deployment evidence currently exists in the accessible Fabushi repositories, so live remote Agent acceptance cannot yet be claimed. |
+| AC-13..14 | pending | Conversation/transcript/composer/lifecycle/waiting-user/attachments and MCP/plugin/channel surfaces are implemented and contract-tested; packaged and visual acceptance are still required. |
+| AC-15 | pending | Browser Control is wired as a durable Browser Runner with ToolStarted/ToolCompleted projection and result relay to Coordinator. Final packaged real-Chrome proof is still pending. |
+| AC-16..23 | pending | Preservation/security contract tests exist for Browser Control, userscripts, Marketplace/Mini Apps, same-account browser integration, recovery/keep-awake and Native Messaging. Final packaged zero-regression evidence is incomplete. |
+| AC-24 | passed | Shipping Agent workspace contains no legacy `feature.execute/chat.send` fallback and architecture tests fail if that hidden second chat engine returns. |
+| AC-25 | pending | Validate gates are established. Packaged Chrome E2E is mandatory and currently being closed; a failing packaged step blocks artifact publication. |
+| AC-26 | pending | Reproducible ZIP, exact source provenance, content SHA-256 manifest and ZIP checksum are implemented. Final evidence must bind to the final exact HEAD after packaged E2E succeeds. |
+| AC-27 | pending | Packaged acceptance fixture exercises accepted/thinking -> real Browser Runner tab creation -> result -> resume after app/worker restart -> terminal stream, but the final exact-HEAD workflow must succeed before this AC passes. |
+| AC-28 | pending | Final review cannot pass while AC-3/4, AC-7..10, AC-12, AC-13..23, AC-25..27 remain non-final. |
 
-Allowed migration status: `pending`. Allowed final statuses: `passed`, `blocked`, `not-applicable`.
+### 26.1 Implementation record — 2026-09-23
+
+- Cut the toolbar entry from popup semantics to the full extension application.
+- Added Coordinator v1 lifecycle/request/reply/event/cancel parsing, run/generation/sequence fencing and durable view cursor recovery.
+- Added a typed renderer runtime and removed the old normal-production `feature.execute/chat.send` fallback.
+- Added unified native/remote Coordinator adapters and a shipping authenticated remote WebSocket client. Remote requests are never automatically resent after an unknown-delivery disconnect.
+- Added Browser Runner durable execution records so replay after MV3 restart returns the prior result or fails closed rather than executing the Chrome action twice.
+- Added Agent roster, transcript/composer, lifecycle states, waiting-user/approval/secret/widget interactions, attachments, MCP/plugin sync, connectors/channels, account/runtime and Browser context surfaces.
+- Preserved existing Browser Control, account browser agent, userscript recovery/update, Marketplace/Mini Apps and Native Messaging modules with regression contracts.
+- Added a reproducible exact-source package, content checksum/provenance verification, and a real-Chrome packaged recovery E2E fixture using a Native Messaging Coordinator fixture.
+- Added a final ledger mode. Inventory-green is no longer equivalent to final parity-green.
+
+Allowed migration status: `pending` or an explicitly documented `blocked`. Allowed final statuses: `passed`, `blocked`, `not-applicable`; completion requires no mandatory blocked item.
