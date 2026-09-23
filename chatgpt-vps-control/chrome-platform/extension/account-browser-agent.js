@@ -57,9 +57,17 @@ async function session() {
   return (await chrome.storage.session.get(SESSION_KEY))[SESSION_KEY] || null;
 }
 
+globalThis.__fabushiGetCoordinatorAccountSession = async () => {
+  const current = await session();
+  return current?.accessToken ? { accessToken: current.accessToken } : null;
+};
+
 async function setSession(value) {
   if (value) await chrome.storage.session.set({ [SESSION_KEY]: value });
   else await chrome.storage.session.remove(SESSION_KEY);
+  queueMicrotask(() => {
+    try { globalThis.__fabushiRemoteCoordinatorAuthChanged?.(); } catch {}
+  });
 }
 
 function closeSocket(reason = "Fabushi Chrome signed out.") {
