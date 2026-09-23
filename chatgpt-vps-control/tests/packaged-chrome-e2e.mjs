@@ -176,7 +176,7 @@ async function stopChrome() {
   cdp = null;
 }
 
-launchChrome();
+launchChrome({ loadExtension: true });
 
 async function targets() {
   return (await cdp.send("Target.getTargets")).targetInfos || [];
@@ -362,8 +362,11 @@ async function exampleTabCount(page) {
 }
 
 try {
-  const loadedExtension = await cdp.send("Extensions.loadUnpacked", { path: extensionDir });
-  const extensionId = String(loadedExtension.id || "");
+  const extensionId = await waitFor(async () => {
+    const fromProfile = await extensionIdFromProfile();
+    if (fromProfile) return fromProfile;
+    return extensionIdFromManager();
+  }, "Fabushi extension id", 25_000, 250);
   assert.match(extensionId, /^[a-p]{32}$/);
 
   const hostManifest = {
