@@ -32,8 +32,10 @@ if (!Array.isArray(ledger.records) || ledger.records.length !== 2046) {
 }
 
 const paths = new Set();
+const statusCounts = new Map();
 let sourceCount = 0;
 let frontendCount = 0;
+const finalMode = process.argv.includes("--final");
 
 for (const [index, row] of ledger.records.entries()) {
   for (const key of required) {
@@ -54,6 +56,7 @@ for (const [index, row] of ledger.records.entries()) {
   if (!["mapped", "implementing", "implemented", "verified", "blocked", "not-applicable"].includes(row.status)) {
     throw new Error(`invalid status: ${row.reference_path}`);
   }
+  statusCounts.set(row.status, (statusCounts.get(row.status) || 0) + 1);
 
   if (row.status === "not-applicable" && !String(row.replacement_behavior || "").trim()) {
     throw new Error(`N/A row lacks replacement behavior: ${row.reference_path}`);
@@ -68,4 +71,32 @@ if (sourceCount !== 1724 || frontendCount !== 322) {
   throw new Error(`scope counts differ from pinned baseline: source=${sourceCount}, frontend=${frontendCount}`);
 }
 
-console.log(`Grok Chrome parity ledger: ${ledger.records.length} unique rows (source=${sourceCount}, frontend=${frontendCount})`);
+const statusSummary = [...statusCounts.entries()]
+  .sort(([left], [right]) => left.localeCompare(right))
+  .map(([status, count]) => `${status}=${count}`)
+  .join(", ");
+
+console.log(`Grok Chrome parity ledger: ${ledger.records.length} unique rows (source=${sourceCount}, frontend=${frontendCount}); ${statusSummary}`);
+
+if (finalMode) {
+  const nonFinal = ledger.records.filter((row) => !["verified", "not-applicable"].includes(row.status));
+  const blocked = ledger.records.filter((row) => row.status === "blocked");
+  const weakVerified = ledger.records.filter((row) =>
+    row.status === "verified"
+    && (
+      !Array.isArray(row.tests) || row.tests.length === 0
+      || !Array.isArray(row.production_evidence) || row.production_evidence.length === 0
+      || !String(row.replacement_behavior || "").trim()
+    )
+  );
+
+  if (nonFinal.length || blocked.length || weakVerified.length) {
+    const sample = nonFinal.slice(0, 12).map((row) => `${row.status}:${row.reference_path}`).join("\n");
+    throw new Error(
+      [
+        `final parity ledger is not closed: nonFinal=${nonFinal.length}, blocked=${blocked.length}, weakVerified=${weakVerified.length}`,
+        sample,
+      ].filter(Boolean).join("\n")
+    );
+  }
+}
