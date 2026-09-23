@@ -594,6 +594,209 @@ export function createAgentWorkspace({ showBanner, hideBanner }) {
     }
   }
 
+  async function refreshAccount() {
+    try {
+      const value = await runtime.accountStatus();
+      state.account = value && typeof value === "object"
+        ? value
+        : { loggedIn: false, loggingIn: false, connected: false, account: null, error: "" };
+    } catch (error) {
+      state.account = { loggedIn: false, loggingIn: false, connected: false, account: null, error: error?.message || String(error) };
+    }
+    renderContext();
+  }
+
+  async function accountLogin() {
+    state.account = { ...state.account, loggingIn: true, error: "" };
+    renderContext();
+    try {
+      await runtime.accountLogin();
+      await refreshAccount();
+    } catch (error) {
+      state.account = { ...state.account, loggingIn: false, error: error?.message || String(error) };
+      renderContext();
+    }
+  }
+
+  async function accountLogout() {
+    try {
+      await runtime.accountLogout();
+    } catch (error) {
+      showBanner?.(error?.message || String(error), "error");
+    } finally {
+      await refreshAccount();
+    }
+  }
+
+  async function refreshPluginStatus() {
+    state.pluginSync = { ...state.pluginSync, status: "loading", error: "" };
+    renderContext();
+    try {
+      const result = await coordinatorCall("getPluginSyncStatus", {}, { timeoutMs: 20_000 });
+      const blocked = Array.isArray(result?.authBlocked)
+        ? result.authBlocked.flatMap((candidate) => {
+          if (!candidate || typeof candidate !== "object") return [];
+          const pluginId = textValue(candidate.pluginId);
+          const pluginName = textValue(candidate.pluginName);
+          if (!pluginId || !pluginName) return [];
+          return [{ pluginId, pluginName, marketplaceName: textValue(candidate.marketplaceName) }];
+        })
+        : [];
+      state.pluginSync = { status: "ready", authBlocked: blocked, error: "" };
+    } catch (error) {
+      state.pluginSync = { status: "failed", authBlocked: [], error: error?.message || String(error) };
+    }
+    renderContext();
+  }
+
+  async function sendDirectPrompt(agentId, prompt) {
+    const nonce = crypto.randomUUID();
+    const createdAtMs = Date.now();
+    const requestId = `send-${nonce}`;
+    state.inFlightRequestId = requestId;
+    state.phase = "accepted";
+    renderPhase();
+
+    try {
+      await coordinatorCall("sendPrompt", {
+        agentId,
+        prompt,
+        directAddressedAcceptance: true,
+        attachmentPaths: [],
+        attachmentNames: [],
+        clientNonce: nonce,
+        enterEpochMs: createdAtMs,
+        composedAtMs: createdAtMs,
+      }, { requestId, timeoutMs: 60_000 });
+      state.phase = "preparing";
+      scheduleTranscriptRefresh();
+      return true;
+    } catch (error) {
+      if (error?.code === "coordinator-transport-lost" || error?.delivery === "unknown") {
+        state.phase = "recovering";
+        showBanner?.(
+          "Coordinator acknowledgement was lost after dispatch. Fabushi will resync this run instead of sending the setup request again.",
+          "warning"
+        );
+        return false;
+      }
+      state.phase = error?.code === "coordinator-unavailable" ? "recovering" : "failed";
+      state.inFlightRequestId = "";
+      showBanner?.(error?.message || String(error), "error");
+      return false;
+    } finally {
+      renderPhase();
+    }
+  }
+
+  async function fixPluginAuthentication() {
+    let setupAgent = state.agents.find((agent) => agent.raw?.purpose === PLUGIN_AUTH_AGENT_PURPOSE) || null;
+    try {
+      if (!setupAgent) {
+        const created = await coordinatorCall("createAgent", {
+          name: PLUGIN_AUTH_AGENT_NAME,
+          description: "Sets up credentials for installed plugins on the Agent runtime.",
+          purpose: PLUGIN_AUTH_AGENT_PURPOSE,
+          isIntroductionSuppressed: true,
+          clientNonce: crypto.randomUUID(),
+        }, { timeoutMs: 30_000 });
+        setupAgent = projectAgent(created?.agent || created);
+        await refreshRoster();
+      }
+      if (!setupAgent) throw new Error("Plugin Setup Agent creation returned no Agent id.");
+      await openAgent(setupAgent.id);
+      await sendDirectPrompt(setupAgent.id, PLUGIN_AUTH_PROMPT);
+    } catch (error) {
+      showBanner?.(error?.message || String(error), "error");
+    }
+  }
+
+  function projectChannels(value) {
+    const view = value?.view && typeof value.view === "object" ? value.view : value;
+    const manifests = Array.isArray(view?.manifests)
+      ? view.manifests.flatMap((candidate) => {
+        if (!candidate || typeof candidate !== "object") return [];
+        const platform = textValue(candidate.platform);
+        const displayName = textValue(candidate.displayName);
+        const availability = candidate.availability === "coming-soon" ? "coming-soon" : "available";
+        if (!platform || !displayName) return [];
+        return [{
+          platform,
+          displayName,
+          blurb: textValue(candidate.blurb),
+          credentialLabel: textValue(candidate.credentialLabel),
+          connectGuide: textValue(candidate.connectGuide),
+          availability,
+        }];
+      })
+      : [];
+    const connections = Array.isArray(view?.connections)
+      ? view.connections.flatMap((candidate) => {
+        if (!candidate || typeof candidate !== "object") return [];
+        const platform = textValue(candidate.platform);
+        const label = textValue(candidate.label);
+        const status = textValue(candidate.status);
+        if (!platform || !label || !status) return [];
+        return [{ platform, label, status, detail: textValue(candidate.detail) }];
+      })
+      : [];
+    return { manifests, connections };
+  }
+
+  async function refreshChannels() {
+    if (!state.activeAgentId) {
+      state.channels = { status: "idle", manifests: [], connections: [], error: "" };
+      renderContext();
+      return;
+    }
+    state.channels = { ...state.channels, status: "loading", error: "" };
+    renderContext();
+    try {
+      const result = await coordinatorCall("getAgentChannels", { id: state.activeAgentId }, { timeoutMs: 20_000 });
+      const projected = projectChannels(result);
+      state.channels = { status: "ready", ...projected, error: "" };
+    } catch (error) {
+      state.channels = { status: "failed", manifests: [], connections: [], error: error?.message || String(error) };
+    }
+    renderContext();
+  }
+
+  async function refreshChannel(platform) {
+    if (!state.activeAgentId || !platform) return;
+    try {
+      const result = await coordinatorCall("refreshChannel", { id: state.activeAgentId, platform }, { timeoutMs: 30_000 });
+      const projected = projectChannels(result);
+      state.channels = { status: "ready", ...projected, error: "" };
+    } catch (error) {
+      state.channels = { ...state.channels, status: "failed", error: error?.message || String(error) };
+    }
+    renderContext();
+  }
+
+  async function disconnectChannel(platform) {
+    if (!state.activeAgentId || !platform) return;
+    try {
+      const result = await coordinatorCall("disconnectChannel", { id: state.activeAgentId, platform }, { timeoutMs: 30_000 });
+      const projected = projectChannels(result);
+      state.channels = { status: "ready", ...projected, error: "" };
+    } catch (error) {
+      state.channels = { ...state.channels, status: "failed", error: error?.message || String(error) };
+    }
+    renderContext();
+  }
+
+  async function startChannelSetup(manifest) {
+    if (!state.activeAgentId || !manifest?.platform) return;
+    const guide = textValue(manifest.connectGuide);
+    const prompt = [
+      `Help me connect the ${manifest.displayName || manifest.platform} channel to this Agent.`,
+      guide ? `Follow this setup guidance: ${guide}` : "",
+      "Do not print, persist, or guess credentials. Ask me through the normal waiting-user/approval flow whenever authentication or a secret is required.",
+      "After the connection is established, verify it with a non-destructive status check and report the connected account label.",
+    ].filter(Boolean).join(" ");
+    await sendDirectPrompt(state.activeAgentId, prompt);
+  }
+
   async function refreshMcp() {
     try {
       const result = await coordinatorCall("listRoutedMcpTools", {}, { timeoutMs: 20_000 });
