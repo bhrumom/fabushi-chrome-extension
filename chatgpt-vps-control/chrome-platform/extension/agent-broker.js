@@ -70,6 +70,70 @@ async function removeClient(clientId) {
   await saveClients();
 }
 
+const TERMINAL_RUN_PHASES = new Set(["completed", "failed", "cancelled"]);
+
+function latestRecoveryCursor(clients, requestedAgentId = "") {
+  const candidates = Object.values(clients)
+    .filter((snapshot) => snapshot && typeof snapshot === "object")
+    .filter((snapshot) => !requestedAgentId || snapshot.activeAgentId === requestedAgentId)
+    .sort((left, right) => {
+      const leftActive = left.runPhase && !TERMINAL_RUN_PHASES.has(left.runPhase) ? 1 : 0;
+      const rightActive = right.runPhase && !TERMINAL_RUN_PHASES.has(right.runPhase) ? 1 : 0;
+      if (leftActive !== rightActive) return rightActive - leftActive;
+      return Number(right.updatedAt || 0) - Number(left.updatedAt || 0);
+    });
+  return candidates[0] || null;
+}
+
+async function recoverClient(clientId, requestedAgentId = "") {
+  const clients = await loadClients();
+  const own = clients[clientId] && typeof clients[clientId] === "object" ? clients[clientId] : null;
+  const prior = own || latestRecoveryCursor(clients, requestedAgentId);
+  const activeAgentId = requestedAgentId || prior?.activeAgentId || "";
+  const recovered = {
+    ...(prior || {}),
+    activeAgentId,
+    recoveredFromPreviousView: !own && Boolean(prior),
+    updatedAt: Date.now(),
+  };
+  clients[clientId] = recovered;
+  await saveClients();
+  return recovered;
+}
+
+async function resumeTransport(cursor, clientId) {
+  if (!cursor?.activeAgentId) return { attempted: false, supported: false };
+  let status;
+  try {
+    status = await discoverTransport();
+  } catch (error) {
+    return { attempted: false, supported: false, error: error?.message || String(error) };
+  }
+
+  const request = {
+    protocolVersion: COORDINATOR_PROTOCOL_VERSION,
+    clientId,
+    activeAgentId: cursor.activeAgentId,
+    runId: cursor.fence?.runId || "",
+    generation: cursor.fence?.generation || "",
+    sequence: Number(cursor.fence?.sequence || 0),
+  };
+
+  try {
+    if (status.kind === "remote") {
+      const remote = remoteTransport();
+      if (typeof remote?.resume !== "function") return { attempted: false, supported: false };
+      const result = await remote.resume(request);
+      return { attempted: true, supported: true, result };
+    }
+
+    const result = await globalThis.__fabushiDesktopRequest("coordinator.resume", request, 20_000);
+    return { attempted: true, supported: true, result };
+  } catch (error) {
+    return { attempted: true, supported: true, error: error?.message || String(error) };
+  }
+}
+
 function unavailable(message) {
   const error = new Error(message);
   error.code = "coordinator-unavailable";
@@ -309,15 +373,30 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.type === "fabushi.agent.status") {
     return respond((async () => {
       const clients = await loadClients();
+      const cursor = clients[clientId] || latestRecoveryCursor(clients) || null;
       let discovered = transportState;
       try { discovered = await discoverTransport(); } catch {}
-      return { transport: discovered, cursor: clients[clientId] || null, protocolVersion: COORDINATOR_PROTOCOL_VERSION };
+      return { transport: discovered, cursor, protocolVersion: COORDINATOR_PROTOCOL_VERSION };
     })());
   }
 
-  if (message.type === "fabushi.agent.attach" || message.type === "fabushi.agent.setActive") {
+  if (message.type === "fabushi.agent.attach") {
     return respond((async () => {
-      const cursor = await updateClient(clientId, { activeAgentId: String(message.activeAgentId || "") });
+      const cursor = await recoverClient(clientId, String(message.activeAgentId || ""));
+      let discovered = transportState;
+      try { discovered = await discoverTransport(); } catch {}
+      const resync = discovered.connected ? await resumeTransport(cursor, clientId) : { attempted: false, supported: false };
+      return { transport: discovered, cursor, resync, protocolVersion: COORDINATOR_PROTOCOL_VERSION };
+    })());
+  }
+
+  if (message.type === "fabushi.agent.setActive") {
+    return respond((async () => {
+      const cursor = await updateClient(clientId, {
+        activeAgentId: String(message.activeAgentId || ""),
+        fence: {},
+        runPhase: "accepted",
+      });
       let discovered = transportState;
       try { discovered = await discoverTransport(); } catch {}
       return { transport: discovered, cursor, protocolVersion: COORDINATOR_PROTOCOL_VERSION };
