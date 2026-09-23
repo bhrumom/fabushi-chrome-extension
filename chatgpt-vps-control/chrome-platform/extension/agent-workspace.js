@@ -544,9 +544,11 @@ export function createAgentWorkspace({ showBanner, hideBanner }) {
     if (empty) empty.hidden = Boolean(state.activeAgentId);
     if (conversation) conversation.hidden = !state.activeAgentId;
 
+    state.channels = { status: state.activeAgentId ? "loading" : "idle", manifests: [], connections: [], error: "" };
     renderRoster();
     renderContext();
     void runtime.setActiveAgent(state.activeAgentId).catch(() => {});
+    if (state.activeAgentId) void refreshChannels();
   }
 
   async function coordinatorCall(method, args = {}, options = {}) {
@@ -1036,7 +1038,7 @@ export function createAgentWorkspace({ showBanner, hideBanner }) {
     stopButton?.addEventListener("click", () => void cancelActive());
     $("#agent-save-name")?.addEventListener("click", () => void renameActiveAgent());
     $("#agent-delete")?.addEventListener("click", () => void deleteActiveAgent());
-    $("#agent-refresh-context")?.addEventListener("click", () => void Promise.allSettled([refreshMcp(), refreshBrowser()]));
+    $("#agent-refresh-context")?.addEventListener("click", () => void Promise.allSettled([refreshMcp(), refreshPluginStatus(), refreshChannels(), refreshAccount(), refreshBrowser()]));
   }
 
   return {
@@ -1056,11 +1058,11 @@ export function createAgentWorkspace({ showBanner, hideBanner }) {
       }
 
       renderPhase();
-      await Promise.allSettled([refreshRoster(), refreshMcp(), refreshBrowser()]);
+      await Promise.allSettled([refreshRoster(), refreshMcp(), refreshPluginStatus(), refreshChannels(), refreshAccount(), refreshBrowser()]);
     },
 
     async refresh() {
-      await Promise.allSettled([refreshRoster(), refreshMcp(), refreshBrowser()]);
+      await Promise.allSettled([refreshRoster(), refreshMcp(), refreshPluginStatus(), refreshChannels(), refreshAccount(), refreshBrowser()]);
     },
 
     setFilter(value) {
