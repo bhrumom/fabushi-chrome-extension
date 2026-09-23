@@ -185,7 +185,13 @@ async function evaluate(sessionId, expression) {
     returnByValue: true,
     userGesture: true
   }, sessionId);
-  if (result.exceptionDetails) throw new Error(result.exceptionDetails.text || "Runtime.evaluate failed");
+  if (result.exceptionDetails) {
+    const description = result.exceptionDetails.exception?.description
+      || result.exceptionDetails.exception?.value
+      || result.exceptionDetails.text
+      || "Runtime.evaluate failed";
+    throw new Error(String(description));
+  }
   return result.result || {};
 }
 
@@ -194,14 +200,29 @@ async function textContent(sessionId, selector) {
 }
 
 async function waitNative(page) {
-  await evaluate(page.sessionId, `chrome.runtime.sendMessage({type:"fabushi.platform.reconnect"}).catch(() => null)`);
+  await evaluate(page.sessionId, `new Promise((resolve) => {
+    try {
+      const maybe = chrome.runtime.sendMessage({type:"fabushi.platform.reconnect"}, (response) => resolve(response ?? true));
+      if (maybe && typeof maybe.then === "function") maybe.then(resolve, () => resolve(false));
+    } catch {
+      resolve(false);
+    }
+  })`);
   await evaluate(page.sessionId, `document.querySelector("#agent-reconnect-runtime")?.click(); true`);
   await waitFor(async () => (await textContent(page.sessionId, "#agent-transport-state")).includes("native connected"), "native Coordinator connection", 25_000);
   await waitFor(async () => (await textContent(page.sessionId, "#chat-list")).includes("Packaged Agent"), "Agent roster", 25_000);
 }
 
 async function exampleTabCount(page) {
-  return Number((await evaluate(page.sessionId, `chrome.tabs.query({}).then((tabs) => tabs.filter((tab) => String(tab.url || "").startsWith("https://example.com/")).length)`)).value || 0);
+  return Number((await evaluate(page.sessionId, `new Promise((resolve) => {
+    try {
+      const done = (tabs) => resolve((tabs || []).filter((tab) => String(tab.url || "").startsWith("https://example.com/")).length);
+      const maybe = chrome.tabs.query({}, done);
+      if (maybe && typeof maybe.then === "function") maybe.then(done, () => resolve(0));
+    } catch {
+      resolve(0);
+    }
+  })`)).value || 0);
 }
 
 try {
