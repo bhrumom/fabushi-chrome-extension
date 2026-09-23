@@ -106,7 +106,8 @@ jobs:
           set -euo pipefail
           command -v google-chrome >/dev/null 2>&1 || command -v google-chrome-stable >/dev/null 2>&1 || command -v chromium >/dev/null 2>&1
           command -v xvfb-run >/dev/null 2>&1
-          xvfb-run -a node chatgpt-vps-control/tests/packaged-chrome-e2e.mjs verify
+          FABUSHI_E2E_EVIDENCE_DIR="$GITHUB_WORKSPACE/dist/e2e" \
+            xvfb-run -a node chatgpt-vps-control/tests/packaged-chrome-e2e.mjs verify
 
       - name: Upload exact-HEAD Chrome artifact
         uses: actions/upload-artifact@v4
@@ -116,6 +117,7 @@ jobs:
             dist/fabushi-chrome-*.zip
             dist/fabushi-chrome-*.zip.sha256
             dist/fabushi-chrome-*.content-sha256
+            dist/e2e/**
           if-no-files-found: error
           retention-days: 14
 
