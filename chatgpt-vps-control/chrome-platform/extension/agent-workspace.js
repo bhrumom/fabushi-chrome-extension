@@ -55,7 +55,7 @@ function safeId(entry, index) {
   return textValue(entry?.id) || `entry-${index}`;
 }
 
-export function createAgentWorkspace({ desktopRequest, showBanner, hideBanner }) {
+export function createAgentWorkspace({ showBanner, hideBanner }) {
   const runtime = createExtensionPlatformRuntime();
   const state = {
     filter: "",
@@ -322,62 +322,6 @@ export function createAgentWorkspace({ desktopRequest, showBanner, hideBanner })
     if (family === "transcript" || String(family).includes("transcript")) scheduleTranscriptRefresh();
   }
 
-  function handleLegacyPlatformEvent(event) {
-    if (!event || typeof event !== "object") return false;
-
-    if (event.type === "conversation.listed" && Array.isArray(event.conversations)) {
-      state.agents = event.conversations.map(projectAgent).filter(Boolean);
-      state.transport = { kind: "legacy-native", connected: true };
-      renderRoster();
-      renderPhase();
-      return true;
-    }
-
-    if (event.type === "conversation.opened") {
-      if (event.conversationId) selectAgent(event.conversationId);
-      state.entries = Array.isArray(event.messages) ? event.messages : [];
-      renderEntries();
-      return true;
-    }
-
-    if (event.type === "chat.message") {
-      state.entries.push({ id: crypto.randomUUID(), role: event.role, text: event.text || "" });
-      renderEntries();
-      return true;
-    }
-
-    if (event.type === "chat.delta") {
-      state.phase = "streaming";
-      const last = state.entries.at(-1);
-      if (last?.role === "assistant" && last.streaming) {
-        last.text = `${last.text || ""}${event.delta || ""}`;
-      } else {
-        state.entries.push({
-          id: crypto.randomUUID(),
-          role: "assistant",
-          text: event.delta || "",
-          streaming: true,
-        });
-      }
-      renderEntries();
-      renderPhase();
-      return true;
-    }
-
-    if (["operation.completed", "operation.failed", "operation.interrupted"].includes(event.type)) {
-      state.phase = event.type === "operation.completed"
-        ? "completed"
-        : event.type === "operation.failed" ? "failed" : "cancelled";
-      if (state.entries.at(-1)?.streaming) state.entries.at(-1).streaming = false;
-      state.inFlightRequestId = "";
-      renderEntries();
-      renderPhase();
-      return true;
-    }
-
-    return false;
-  }
-
   async function createAgent() {
     try {
       const result = await coordinatorCall("createAgent", {
@@ -390,22 +334,15 @@ export function createAgentWorkspace({ desktopRequest, showBanner, hideBanner })
       const raw = result?.agent || result;
       const agent = projectAgent(raw);
       await refreshRoster();
-      if (agent) await openAgent(agent.id);
-      return;
-    } catch (error) {
-      if (error?.code !== "coordinator-unavailable") {
-        showBanner?.(error.message, "error");
-        return;
+      if (agent) {
+        await openAgent(agent.id);
+        input?.focus();
       }
+    } catch (error) {
+      state.phase = error?.code === "coordinator-unavailable" ? "recovering" : "failed";
+      renderPhase();
+      showBanner?.(error.message, "error");
     }
-
-    if (!state.agents.some((agent) => agent.id === "new")) {
-      state.agents.unshift({ id: "new", name: "New chat", description: "", updatedAt: Date.now(), raw: {} });
-    }
-    state.entries = [];
-    selectAgent("new");
-    renderEntries();
-    input?.focus();
   }
 
   async function sendPrompt(text) {
@@ -454,32 +391,12 @@ export function createAgentWorkspace({ desktopRequest, showBanner, hideBanner })
       }
     }
 
-    if (typeof desktopRequest !== "function") {
-      state.phase = "failed";
-      state.inFlightRequestId = "";
-      renderPhase();
-      return;
-    }
-
-    try {
-      const conversationId = state.activeAgentId === "new" ? undefined : state.activeAgentId;
-      await desktopRequest("feature.execute", {
-        command: {
-          type: "chat.send",
-          requestId,
-          text: prompt,
-          conversationId,
-          agentId: conversationId ? undefined : "mahayana-assistant",
-          mode: "agent",
-        },
-      });
-      state.transport = { kind: "legacy-native", connected: true };
-      state.phase = "preparing";
-    } catch (legacyError) {
-      state.phase = "failed";
-      state.inFlightRequestId = "";
-      showBanner?.(legacyError.message, "error");
-    }
+    state.phase = "recovering";
+    state.inFlightRequestId = "";
+    showBanner?.(
+      "No Coordinator runtime is available. Connect an authenticated remote runtime or a Coordinator-capable native host.",
+      "error"
+    );
     renderPhase();
   }
 
@@ -576,7 +493,6 @@ export function createAgentWorkspace({ desktopRequest, showBanner, hideBanner })
       renderRoster();
     },
 
-    handleLegacyPlatformEvent,
 
     dispose() {
       clearTimeout(state.refreshTimer);
