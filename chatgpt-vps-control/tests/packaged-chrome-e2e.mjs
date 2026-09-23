@@ -160,16 +160,24 @@ async function targets() {
 }
 
 async function extensionIdFromProfile() {
-  try {
-    const preferences = JSON.parse(await readFile(join(profile, "Default", "Preferences"), "utf8"));
-    const settings = preferences?.extensions?.settings;
-    if (!settings || typeof settings !== "object") return "";
-    for (const [extensionId, setting] of Object.entries(settings)) {
-      if (!setting || typeof setting !== "object") continue;
-      const configuredPath = typeof setting.path === "string" ? resolve(setting.path) : "";
-      if (configuredPath === extensionDir && setting.state !== 0) return extensionId;
-    }
-  } catch {}
+  for (const fileName of ["Secure Preferences", "Preferences"]) {
+    try {
+      const preferences = JSON.parse(await readFile(join(profile, "Default", fileName), "utf8"));
+      const settings = preferences?.extensions?.settings;
+      if (!settings || typeof settings !== "object") continue;
+      for (const [extensionId, setting] of Object.entries(settings)) {
+        if (!setting || typeof setting !== "object") continue;
+        const configuredPath = typeof setting.path === "string" ? resolve(setting.path) : "";
+        const manifestName = String(setting.manifest?.name || "");
+        if (
+          setting.state !== 0
+          && (configuredPath === extensionDir || manifestName === "Fabushi")
+        ) {
+          return extensionId;
+        }
+      }
+    } catch {}
+  }
   return "";
 }
 
