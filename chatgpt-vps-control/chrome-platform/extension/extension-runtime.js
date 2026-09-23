@@ -94,6 +94,18 @@ export function createExtensionPlatformRuntime() {
       return runtimeMessage({ type: "fabushi.account.status" }, 15_000);
     },
 
+    async accountLogin() {
+      const response = await runtimeMessage({ type: "fabushi.account.login" }, 10 * 60_000);
+      if (!response?.ok) throw runtimeError(response);
+      return response.account;
+    },
+
+    async accountLogout() {
+      const response = await runtimeMessage({ type: "fabushi.account.logout" }, 30_000);
+      if (!response?.ok) throw runtimeError(response);
+      return response.account;
+    },
+
     async stageAttachment(file, options = {}) {
       if (!(file instanceof File)) throw new TypeError("stageAttachment requires a File.");
       const attachmentId = crypto.randomUUID();
