@@ -78,6 +78,15 @@ async function waitForFrame(socket, predicate) {
   return null;
 }
 
+async function waitForFrame(socket, predicate) {
+  for (let attempt = 0; attempt < 80; attempt += 1) {
+    const frame = socket.sent.find(predicate);
+    if (frame) return frame;
+    await new Promise((resolve) => setImmediate(resolve));
+  }
+  return null;
+}
+
 async function readyTransport(factory) {
   const transport = factory({
     url: "wss://fabushi-mcp.ombhrum.com/coordinator",
