@@ -47,24 +47,76 @@ jobs:
           test "${GITHUB_REF_NAME#v}" = "$version"
 
   package:
-    if: startsWith(github.ref, 'refs/tags/')
     needs: validate
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - name: Check out source
+      - name: Check out exact source
         uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
 
-      - name: Package Chrome extension
+      - name: Build reproducible Chrome extension artifact
         shell: bash
         run: |
           set -euo pipefail
           version="$(node -p "require('./chatgpt-vps-control/chrome-platform/extension/manifest.json').version")"
-          mkdir -p dist
-          (cd chatgpt-vps-control/chrome-platform/extension && zip -qr "$GITHUB_WORKSPACE/dist/fabushi-chrome-$version.zip" .)
+          source_sha="${{ github.event.pull_request.head.sha || github.sha }}"
+          stage="$RUNNER_TEMP/fabushi-chrome-$version"
+          rm -rf "$stage" dist verify
+          mkdir -p "$stage" dist verify
+          cp -a chatgpt-vps-control/chrome-platform/extension/. "$stage/"
+
+          node -e '
+            const fs = require("fs");
+            const path = process.argv[1];
+            const data = { schemaVersion: 1, sourceSha: process.argv[2], version: process.argv[3] };
+            fs.writeFileSync(path, JSON.stringify(data, null, 2) + "\n");
+          ' "$stage/fabushi-build-provenance.json" "$source_sha" "$version"
+
+          find "$stage" -exec touch -t 198001010000.00 {} +
+          (
+            cd "$stage"
+            find . -type f ! -name 'fabushi-content-sha256.txt' -print0               | LC_ALL=C sort -z               | xargs -0 sha256sum > fabushi-content-sha256.txt
+            find . -exec touch -t 198001010000.00 {} +
+            find . -type f -print | LC_ALL=C sort | zip -X -q "$GITHUB_WORKSPACE/dist/fabushi-chrome-$version.zip" -@
+          )
+          cp "$stage/fabushi-content-sha256.txt" "dist/fabushi-chrome-$version.content-sha256"
+          (cd dist && sha256sum "fabushi-chrome-$version.zip" > "fabushi-chrome-$version.zip.sha256")
+
+      - name: Verify packaged artifact
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="$(node -p "require('./chatgpt-vps-control/chrome-platform/extension/manifest.json').version")"
+          unzip -q "dist/fabushi-chrome-$version.zip" -d verify
+          test "$(node -p "require('./verify/manifest.json').version")" = "$version"
+          test "$(node -p "require('./verify/fabushi-build-provenance.json').sourceSha")" = "${{ github.event.pull_request.head.sha || github.sha }}"
+          (
+            cd verify
+            sha256sum -c fabushi-content-sha256.txt
+          )
+          while IFS= read -r -d '' file; do
+            node --check "$file"
+          done < <(find verify -type f -name '*.js' -print0)
+
+      - name: Upload exact-HEAD Chrome artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: fabushi-chrome-${{ github.event.pull_request.head.sha || github.sha }}
+          path: |
+            dist/fabushi-chrome-*.zip
+            dist/fabushi-chrome-*.zip.sha256
+            dist/fabushi-chrome-*.content-sha256
+          if-no-files-found: error
+          retention-days: 14
 
       - name: Publish GitHub Release
+        if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
           generate_release_notes: true
-          files: dist/fabushi-chrome-*.zip
+          files: |
+            dist/fabushi-chrome-*.zip
+            dist/fabushi-chrome-*.zip.sha256
+            dist/fabushi-chrome-*.content-sha256
