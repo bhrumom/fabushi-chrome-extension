@@ -23,15 +23,17 @@ test("Agent renderer uses a typed platform runtime and the worker remains a brok
   const runtime = await source("extension-runtime.js");
   const workspace = await source("agent-workspace.js");
   const broker = await source("agent-broker.js");
+  const transports = await source("coordinator-transports.js");
 
   assert.match(runtime, /fabushi\.agent\.attach/);
   assert.match(runtime, /fabushi\.agent\.call/);
   assert.doesNotMatch(workspace, /chrome\.runtime\.sendMessage/);
 
-  assert.match(broker, /coordinator\.call/);
+  assert.match(broker, /transportRouter\.call/);
   assert.match(broker, /COORDINATOR_PROTOCOL_VERSION/);
   assert.match(broker, /chrome\.storage\.local/);
-  assert.match(broker, /delivery = "unknown"/);
+  assert.match(transports, /coordinator\.call/);
+  assert.match(transports, /"unknown"/);
 });
 
 test("unknown delivery never falls back to a duplicate legacy send", async () => {
@@ -74,11 +76,22 @@ test("Grok-shaped workspace projects lifecycle MCP tools and Browser context", a
 
 test("app reload recovery reclaims the latest durable cursor and asks transport to resume it", async () => {
   const broker = await source("agent-broker.js");
+  const transports = await source("coordinator-transports.js");
   assert.match(broker, /latestRecoveryCursor/);
   assert.match(broker, /recoverClient/);
   assert.match(broker, /recoveredFromPreviousView/);
-  assert.match(broker, /coordinator\.resume/);
+  assert.match(broker, /transportRouter\.resume/);
+  assert.match(transports, /coordinator\.resume/);
   assert.match(broker, /runId:\s*cursor\.fence\?\.runId/);
   assert.match(broker, /generation:\s*cursor\.fence\?\.generation/);
   assert.match(broker, /sequence:\s*Number\(cursor\.fence\?\.sequence/);
+});
+
+
+test("shipping Agent workspace has one Coordinator client and no hidden legacy chat fallback", async () => {
+  const app = await source("app.js");
+  const workspace = await source("agent-workspace.js");
+  assert.doesNotMatch(workspace, /feature\.execute|chat\.send|legacy-native|handleLegacyPlatformEvent/);
+  assert.doesNotMatch(app, /conversation\.listed|conversation\.opened|chat\.delta|handlePlatformEvent/);
+  assert.match(app, /createAgentWorkspace/);
 });
