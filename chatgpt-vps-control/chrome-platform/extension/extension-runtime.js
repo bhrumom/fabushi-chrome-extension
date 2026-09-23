@@ -94,7 +94,7 @@ export function createExtensionPlatformRuntime() {
       return runtimeMessage({ type: "fabushi.account.status" }, 15_000);
     },
 
-    async stageAttachment(file) {
+    async stageAttachment(file, options = {}) {
       if (!(file instanceof File)) throw new TypeError("stageAttachment requires a File.");
       const attachmentId = crypto.randomUUID();
       const bytes = new Uint8Array(await file.arrayBuffer());
@@ -109,7 +109,7 @@ export function createExtensionPlatformRuntime() {
         attachment: {
           attachmentId,
           name: file.name,
-          mimeType: file.type || "application/octet-stream",
+          mimeType: String(options.mimeType || file.type || "application/octet-stream"),
           size: file.size,
           bytesBase64: btoa(binary),
         },
