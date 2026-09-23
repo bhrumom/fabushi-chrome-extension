@@ -789,10 +789,151 @@ export function createAgentWorkspace({ showBanner, hideBanner }) {
     }
   }
 
+  function renderSnapshotList(container, snapshot, emptyText, renderItem) {
+    if (!container) return;
+    container.replaceChildren();
+
+    if (!state.activeAgentId) {
+      const row = document.createElement("div");
+      row.className = "context-muted";
+      row.textContent = "Choose an Agent.";
+      container.append(row);
+      return;
+    }
+
+    if (snapshot.status === "loading") {
+      const row = document.createElement("div");
+      row.className = "context-muted";
+      row.textContent = "Loading…";
+      container.append(row);
+      return;
+    }
+
+    if (snapshot.status === "failed") {
+      const row = document.createElement("div");
+      row.className = "context-row context-error";
+      row.textContent = snapshot.error || "Unavailable.";
+      container.append(row);
+      return;
+    }
+
+    const items = Array.isArray(snapshot.items) ? snapshot.items : [];
+    if (!items.length) {
+      const row = document.createElement("div");
+      row.className = "context-muted";
+      row.textContent = emptyText;
+      container.append(row);
+      return;
+    }
+
+    for (const item of items) {
+      const node = renderItem(item);
+      if (node) container.append(node);
+    }
+  }
+
+  function renderAsyncTasks() {
+    renderSnapshotList(asyncTasksList, state.asyncTasks, "No async tasks in progress.", (task) => {
+      const row = document.createElement("div");
+      row.className = "context-row";
+      const title = document.createElement("strong");
+      title.textContent = textValue(task?.label) || textValue(task?.id) || "Async task";
+      const detail = document.createElement("div");
+      detail.className = "context-muted";
+      const kind = textValue(task?.kind) || "task";
+      const extra = textValue(task?.detail);
+      detail.textContent = extra ? `${kind} · ${extra}` : kind;
+      row.append(title, detail);
+      return row;
+    });
+  }
+
+  function outlineLabel(item) {
+    const kind = textValue(item?.kind);
+    if (kind === "user" || kind === "assistant-text" || kind === "thinking") return textValue(item?.text);
+    if (kind === "send-message") {
+      const message = item?.message;
+      return message?.type === "text" ? textValue(message.content) : textValue(message?.alt) || "Attachment";
+    }
+    if (kind === "tool-call") {
+      const name = textValue(item?.name) || "Tool";
+      const summary = textValue(item?.summary);
+      return summary ? `${name} · ${summary}` : name;
+    }
+    return kind || "Conversation item";
+  }
+
+  function renderOutline() {
+    renderSnapshotList(outlineList, state.outline, "No conversation outline yet.", (item) => {
+      const row = document.createElement("div");
+      row.className = "context-row";
+      const title = document.createElement("strong");
+      title.textContent = textValue(item?.kind) || "item";
+      const detail = document.createElement("div");
+      detail.className = "context-muted";
+      const label = outlineLabel(item);
+      detail.textContent = label.length > 180 ? `${label.slice(0, 177)}…` : label;
+      row.append(title, detail);
+      return row;
+    });
+  }
+
+  function renderWorkflows() {
+    renderSnapshotList(workflowsList, state.workflows, "No workflows available for this Agent.", (workflow) => {
+      const row = document.createElement("div");
+      row.className = "context-row context-row-actions";
+
+      const copy = document.createElement("div");
+      const title = document.createElement("strong");
+      title.textContent = textValue(workflow?.name) || "Workflow";
+      const detail = document.createElement("div");
+      detail.className = "context-muted";
+      const enabled = workflow?.isEnabledForAgent !== false;
+      const trigger = workflow?.trigger?.schedule || workflow?.scheduleDescription || "";
+      detail.textContent = trigger ? `${enabled ? "Enabled" : "Disabled"} · ${trigger}` : enabled ? "Enabled" : "Disabled";
+      copy.append(title, detail);
+      row.append(copy);
+
+      if (textValue(workflow?.id)) {
+        row.append(actionButton(enabled ? "Disable" : "Enable", () => void setWorkflowEnabled(workflow, !enabled)));
+      }
+      return row;
+    });
+  }
+
+  function renderAutomations() {
+    renderSnapshotList(automationsList, state.automations, "No automations configured.", (automation) => {
+      const row = document.createElement("div");
+      row.className = "context-row context-row-actions";
+
+      const copy = document.createElement("div");
+      const title = document.createElement("strong");
+      title.textContent = textValue(automation?.name) || "Automation";
+      const detail = document.createElement("div");
+      detail.className = "context-muted";
+      const trigger = textValue(automation?.triggerDescription) || textValue(automation?.trigger?.schedule) || "Manual";
+      detail.textContent = `${automation?.isEnabled === false ? "Disabled" : "Enabled"} · ${trigger}`;
+      copy.append(title, detail);
+      row.append(copy);
+
+      if (textValue(automation?.id)) {
+        row.append(
+          actionButton("Run now", () => void runAutomationNow(automation)),
+          actionButton(automation?.isEnabled === false ? "Enable" : "Disable", () => void setAutomationEnabled(automation, automation?.isEnabled === false))
+        );
+      }
+      return row;
+    });
+  }
+
   function renderContext() {
     renderAccount();
     renderPlugins();
     renderChannels();
+    renderAsyncTasks();
+    renderOutline();
+    renderWorkflows();
+    renderAutomations();
 
     if (mcpList) {
       mcpList.replaceChildren();
