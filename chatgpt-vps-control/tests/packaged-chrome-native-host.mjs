@@ -204,20 +204,21 @@ async function handle(message) {
     }
 
     if (method === "coordinator.resume") {
-      const state = await mutate(async (draft) => { draft.resumeCount += 1; });
+      let state = await mutate(async (draft) => { draft.resumeCount += 1; });
+      if (state.active) {
+        await emitBrowserCall(state);
+        if (state.resumeCount >= 2 && state.browserToolResultCount >= 1) {
+          await emitFinal(state);
+          state = await readState();
+        }
+      }
       await response(requestId, {
         resumed: true,
         runId: state.runId,
         generation: state.generation,
-        sequence: Number(params.sequence || 0)
+        sequence: state.finalSent ? 3 : Math.max(1, Number(params.sequence || 0)),
+        phase: state.finalSent ? "completed" : state.active ? "tool-running" : "completed"
       });
-      if (state.active) {
-        await emitBrowserCall(state);
-        if (state.resumeCount >= 2 && state.browserToolResultCount >= 1) {
-          const latest = await readState();
-          await emitFinal(latest);
-        }
-      }
       return;
     }
 
