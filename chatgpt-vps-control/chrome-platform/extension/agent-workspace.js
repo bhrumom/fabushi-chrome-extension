@@ -290,6 +290,66 @@ export function createAgentWorkspace({ showBanner, hideBanner }) {
     node.append(title, detail);
   }
 
+  async function resolveLocalToolPermission(entry, resolution) {
+    const ask = entry?.message?.ask;
+    if (!state.activeAgentId || !entry?.id || !ask?.requestId) return;
+    try {
+      await coordinatorCall("resolveLocalToolPermission", {
+        entryId: entry.id,
+        requestId: ask.requestId,
+        resolution,
+        agentId: state.activeAgentId,
+      }, { timeoutMs: 30_000 });
+      await refreshTranscript();
+    } catch (error) {
+      showBanner?.(error?.message || String(error), "error");
+    }
+  }
+
+  async function resolveAutoReviewApproval(entry, resolution) {
+    const approval = entry?.message?.approval;
+    if (!state.activeAgentId || !entry?.id || !approval?.requestId) return;
+    try {
+      await coordinatorCall("resolveAutoReviewApproval", {
+        entryId: entry.id,
+        requestId: approval.requestId,
+        resolution,
+        agentId: state.activeAgentId,
+      }, { timeoutMs: 30_000 });
+      await refreshTranscript();
+    } catch (error) {
+      showBanner?.(error?.message || String(error), "error");
+    }
+  }
+
+  async function respondToWidget(entry, value) {
+    if (!state.activeAgentId || !entry?.id || !String(value || "").trim()) return;
+    try {
+      const result = await coordinatorCall("respondToWidget", {
+        entryId: entry.id,
+        value: String(value).trim(),
+        agentId: state.activeAgentId,
+      }, { timeoutMs: 30_000 });
+      if (result && typeof result === "object" && result.accepted === false) {
+        showBanner?.("That choice is no longer waiting for an answer.", "warning");
+      }
+      await refreshTranscript();
+    } catch (error) {
+      showBanner?.(error?.message || String(error), "error");
+    }
+  }
+
+  function hasPendingWaitingUserEntry(entries) {
+    return entries.some((entry) => {
+      const message = entry?.message;
+      if (message?.type === "local-tool-permission") return message.ask?.status === "pending";
+      if (message?.type === "auto-review-approval") return message.approval?.status === "pending";
+      if (message?.type === "widget") return !entry.respondedValue && entry.widgetDismissed !== true;
+      if (message?.type === "secret-request") return entry.secretProvided !== true;
+      return false;
+    });
+  }
+
   function renderEntries() {
     if (!messages) return;
     messages.replaceChildren();
@@ -667,6 +727,10 @@ export function createAgentWorkspace({ showBanner, hideBanner }) {
       { timeoutMs: 30_000 }
     );
     state.entries = asArray(result);
+    if (hasPendingWaitingUserEntry(state.entries)) {
+      state.phase = "waiting-user";
+      renderPhase();
+    }
     renderEntries();
   }
 
