@@ -131,3 +131,49 @@
     display: none;
   }
 }
+
+
+.attachment-tray {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 0 16px 10px;
+}
+.attachment-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  max-width: 320px;
+  border: 1px solid var(--line, #e5e7eb);
+  border-radius: 12px;
+  padding: 7px 9px;
+  background: #fff;
+  font-size: 12px;
+}
+.attachment-chip strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.attachment-chip[data-status="staging"] {
+  opacity: 0.65;
+}
+.attachment-chip[data-status="failed"] {
+  border-color: #fecaca;
+}
+.attachment-chip[data-status="submitted"] {
+  opacity: 0.75;
+}
+.attachment-chip button {
+  padding: 2px 5px;
+  min-width: 0;
+}
+.attach-button {
+  align-self: stretch;
+  min-width: 42px;
+  font-size: 20px;
+}
+.agent-composer.drag-active {
+  outline: 2px dashed currentColor;
+  outline-offset: 4px;
+}
