@@ -161,7 +161,11 @@ async function targets() {
 
 async function extensionWorker() {
   const infos = await targets();
-  return infos.find((target) => target.type === "service_worker" && /^chrome-extension:\/\//.test(target.url));
+  return infos.find((target) =>
+    target.type === "service_worker"
+    && /^chrome-extension:\/\//.test(target.url)
+    && target.url.endsWith("/service-worker.js")
+  );
 }
 
 async function openApp(extensionId) {
@@ -175,6 +179,17 @@ async function openApp(extensionId) {
     async () => (await evaluate(sessionId, "document.readyState")).value === "complete",
     "app page load"
   );
+  const identity = (await evaluate(sessionId, `({
+    runtimeId: globalThis.chrome?.runtime?.id || "",
+    title: document.title,
+    href: location.href
+  })`)).value || {};
+  if (identity.runtimeId !== extensionId || identity.title !== "Fabushi") {
+    const currentTargets = await targets();
+    throw new Error(
+      `Opened target is not Fabushi extension app: ${JSON.stringify(identity)}; targets=${JSON.stringify(currentTargets.map(({type,url,title}) => ({type,url,title})))}`
+    );
+  }
   return { targetId: created.targetId, sessionId, url };
 }
 
