@@ -100,6 +100,14 @@ jobs:
             node --check "$file"
           done < <(find verify -type f -name '*.js' -print0)
 
+      - name: Packaged Chrome Agent recovery E2E
+        shell: bash
+        run: |
+          set -euo pipefail
+          command -v google-chrome >/dev/null 2>&1 || command -v google-chrome-stable >/dev/null 2>&1 || command -v chromium >/dev/null 2>&1
+          command -v xvfb-run >/dev/null 2>&1
+          xvfb-run -a node chatgpt-vps-control/tests/packaged-chrome-e2e.mjs verify
+
       - name: Upload exact-HEAD Chrome artifact
         uses: actions/upload-artifact@v4
         with:
