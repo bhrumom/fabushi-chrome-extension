@@ -1,6 +1,42 @@
 import { createExtensionPlatformRuntime } from "./extension-runtime.js";
 import { projectRunPhase } from "./agent-protocol.js";
 
+const MAX_ATTACHMENT_BYTES = 8 * 1024 * 1024;
+const MAX_ATTACHMENTS = 4;
+const ATTACHMENT_MIME_BY_EXTENSION = Object.freeze({
+  ".csv": "text/csv",
+  ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+  ".gif": "image/gif",
+  ".html": "text/html",
+  ".jpeg": "image/jpeg",
+  ".jpg": "image/jpeg",
+  ".json": "application/json",
+  ".md": "text/markdown",
+  ".pdf": "application/pdf",
+  ".png": "image/png",
+  ".pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+  ".rtf": "application/rtf",
+  ".txt": "text/plain",
+  ".webp": "image/webp",
+  ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+});
+
+function attachmentMime(file) {
+  if (file.type) return file.type.toLowerCase();
+  const name = file.name.toLowerCase();
+  const extension = Object.keys(ATTACHMENT_MIME_BY_EXTENSION).find((candidate) => name.endsWith(candidate));
+  return extension ? ATTACHMENT_MIME_BY_EXTENSION[extension] : "application/octet-stream";
+}
+
+function attachmentReference(value) {
+  if (typeof value === "string" && value) return value;
+  if (!value || typeof value !== "object") return "";
+  for (const key of ["reference", "attachmentRef", "token", "path"]) {
+    if (typeof value[key] === "string" && value[key]) return value[key];
+  }
+  return "";
+}
+
 function textValue(value) {
   return typeof value === "string" ? value : "";
 }
@@ -66,6 +102,7 @@ export function createAgentWorkspace({ showBanner, hideBanner }) {
     transport: { kind: "none", connected: false },
     mcp: [],
     browser: { connected: false, tabs: [] },
+    attachments: [],
     inFlightRequestId: "",
     refreshTimer: null,
     started: false,
@@ -86,6 +123,9 @@ export function createAgentWorkspace({ showBanner, hideBanner }) {
   const stopButton = $("#stop-run");
   const composer = $("#composer");
   const input = $("#composer-input");
+  const attachmentTray = $("#attachment-tray");
+  const attachmentInput = $("#attachment-input");
+  const attachButton = $("#attach-file");
 
   function renderPhase() {
     if (runState) {
@@ -168,6 +208,119 @@ export function createAgentWorkspace({ showBanner, hideBanner }) {
     messages.scrollTop = messages.scrollHeight;
   }
 
+  function renderAttachments() {
+    if (!attachmentTray) return;
+    attachmentTray.replaceChildren();
+    attachmentTray.hidden = state.attachments.length === 0;
+
+    for (const attachment of state.attachments) {
+      const chip = document.createElement("div");
+      chip.className = "attachment-chip";
+      chip.dataset.status = attachment.status;
+
+      const name = document.createElement("strong");
+      name.textContent = attachment.name;
+      name.title = attachment.name;
+
+      const detail = document.createElement("span");
+      const size = attachment.size < 1024 * 1024
+        ? `${Math.max(1, Math.round(attachment.size / 1024))} KB`
+        : `${(attachment.size / (1024 * 1024)).toFixed(1)} MB`;
+      detail.textContent = attachment.status === "failed"
+        ? attachment.error || "failed"
+        : attachment.status === "staging" ? `${size} · staging`
+          : attachment.status === "submitted" ? `${size} · submitted`
+            : size;
+
+      chip.append(name, detail);
+
+      if (attachment.status !== "submitted") {
+        const remove = document.createElement("button");
+        remove.type = "button";
+        remove.className = "secondary-button";
+        remove.textContent = "×";
+        remove.title = "Remove attachment";
+        remove.addEventListener("click", () => void removeAttachment(attachment.attachmentId));
+        chip.append(remove);
+      }
+
+      attachmentTray.append(chip);
+    }
+  }
+
+  async function removeAttachment(attachmentId) {
+    const index = state.attachments.findIndex((item) => item.attachmentId === attachmentId);
+    if (index < 0) return;
+    const [attachment] = state.attachments.splice(index, 1);
+    renderAttachments();
+
+    if (attachment.reference && attachment.status !== "submitted") {
+      await runtime.discardAttachment({
+        attachmentId: attachment.attachmentId,
+        reference: attachment.reference,
+      }).catch(() => {});
+    }
+  }
+
+  async function discardUnsubmittedAttachments() {
+    const pending = state.attachments.filter((attachment) => attachment.status !== "submitted");
+    state.attachments = state.attachments.filter((attachment) => attachment.status === "submitted");
+    renderAttachments();
+    await Promise.allSettled(pending
+      .filter((attachment) => attachment.reference)
+      .map((attachment) => runtime.discardAttachment({
+        attachmentId: attachment.attachmentId,
+        reference: attachment.reference,
+      })));
+  }
+
+  async function stageFiles(fileList) {
+    const files = [...(fileList || [])];
+    if (!files.length) return;
+
+    const available = Math.max(0, MAX_ATTACHMENTS - state.attachments.filter((item) => item.status !== "submitted").length);
+    if (available === 0) {
+      showBanner?.(`Up to ${MAX_ATTACHMENTS} staged attachments are allowed per prompt.`, "error");
+      return;
+    }
+
+    for (const file of files.slice(0, available)) {
+      const mimeType = attachmentMime(file);
+      if (file.size <= 0 || file.size > MAX_ATTACHMENT_BYTES) {
+        showBanner?.(`${file.name}: attachments must be between 1 byte and 8 MiB.`, "error");
+        continue;
+      }
+      if (mimeType === "application/octet-stream") {
+        showBanner?.(`${file.name}: unsupported attachment type.`, "error");
+        continue;
+      }
+
+      const local = {
+        attachmentId: crypto.randomUUID(),
+        name: file.name,
+        mimeType,
+        size: file.size,
+        status: "staging",
+        reference: "",
+        error: "",
+      };
+      state.attachments.push(local);
+      renderAttachments();
+
+      try {
+        const staged = await runtime.stageAttachment(file, { mimeType });
+        local.attachmentId = staged.attachmentId || local.attachmentId;
+        local.reference = attachmentReference(staged.result);
+        if (!local.reference) throw new Error("Coordinator did not return a staged attachment reference.");
+        local.status = "ready";
+      } catch (error) {
+        local.status = "failed";
+        local.error = error?.message || String(error);
+      }
+      renderAttachments();
+    }
+  }
+
   function renderContext() {
     if (mcpList) {
       mcpList.replaceChildren();
@@ -207,7 +360,9 @@ export function createAgentWorkspace({ showBanner, hideBanner }) {
   }
 
   function selectAgent(agentId) {
-    state.activeAgentId = String(agentId || "");
+    const nextAgentId = String(agentId || "");
+    if (state.activeAgentId && state.activeAgentId !== nextAgentId) void discardUnsubmittedAttachments();
+    state.activeAgentId = nextAgentId;
     const active = state.agents.find((agent) => agent.id === state.activeAgentId);
 
     if (title) title.textContent = active?.name || "Agent";
@@ -348,7 +503,18 @@ export function createAgentWorkspace({ showBanner, hideBanner }) {
   async function sendPrompt(text) {
     if (!state.activeAgentId || !text.trim()) return;
 
+    if (state.attachments.some((attachment) => attachment.status === "staging")) {
+      showBanner?.("Wait for attachments to finish staging before sending.", "warning");
+      return;
+    }
+    const failedAttachment = state.attachments.find((attachment) => attachment.status === "failed");
+    if (failedAttachment) {
+      showBanner?.(`Remove or retry failed attachment: ${failedAttachment.name}`, "error");
+      return;
+    }
+
     const prompt = text.trim();
+    const promptAttachments = state.attachments.filter((attachment) => attachment.status === "ready");
     const nonce = crypto.randomUUID();
     const createdAtMs = Date.now();
     const requestId = `send-${nonce}`;
@@ -370,20 +536,28 @@ export function createAgentWorkspace({ showBanner, hideBanner }) {
         agentId: state.activeAgentId,
         prompt,
         directAddressedAcceptance: true,
-        attachmentPaths: [],
-        attachmentNames: [],
+        attachmentPaths: promptAttachments.map((attachment) => attachment.reference),
+        attachmentNames: promptAttachments.map((attachment) => attachment.name),
         clientNonce: nonce,
         enterEpochMs: createdAtMs,
         composedAtMs: createdAtMs,
       }, { requestId, timeoutMs: 60_000 });
       state.phase = "preparing";
+      const submittedIds = new Set(promptAttachments.map((attachment) => attachment.attachmentId));
+      state.attachments = state.attachments.filter((attachment) => !submittedIds.has(attachment.attachmentId));
+      renderAttachments();
       scheduleTranscriptRefresh();
       return;
     } catch (error) {
       if (error?.code !== "coordinator-unavailable" || error?.delivery !== "not-sent") {
         state.phase = "recovering";
+        const submittedIds = new Set(promptAttachments.map((attachment) => attachment.attachmentId));
+        for (const attachment of state.attachments) {
+          if (submittedIds.has(attachment.attachmentId)) attachment.status = "submitted";
+        }
+        renderAttachments();
         showBanner?.(
-          "Coordinator acknowledgement was lost after dispatch. Fabushi will resync this run instead of sending the prompt again.",
+          "Coordinator acknowledgement was lost after dispatch. Fabushi will resync this run instead of sending the prompt or its attachments again.",
           "warning"
         );
         renderPhase();
@@ -458,6 +632,29 @@ export function createAgentWorkspace({ showBanner, hideBanner }) {
       void sendPrompt(value);
     });
 
+    attachButton?.addEventListener("click", () => attachmentInput?.click());
+    attachmentInput?.addEventListener("change", () => {
+      const files = attachmentInput.files;
+      attachmentInput.value = "";
+      void stageFiles(files);
+    });
+    composer?.addEventListener("dragover", (event) => {
+      if (!event.dataTransfer?.types?.includes("Files")) return;
+      event.preventDefault();
+      composer.classList.add("drag-active");
+    });
+    composer?.addEventListener("dragleave", () => composer.classList.remove("drag-active"));
+    composer?.addEventListener("drop", (event) => {
+      if (!event.dataTransfer?.files?.length) return;
+      event.preventDefault();
+      composer.classList.remove("drag-active");
+      void stageFiles(event.dataTransfer.files);
+    });
+    input?.addEventListener("paste", (event) => {
+      const files = [...(event.clipboardData?.files || [])];
+      if (files.length) void stageFiles(files);
+    });
+
     stopButton?.addEventListener("click", () => void cancelActive());
     $("#agent-save-name")?.addEventListener("click", () => void renameActiveAgent());
     $("#agent-delete")?.addEventListener("click", () => void deleteActiveAgent());
@@ -496,6 +693,7 @@ export function createAgentWorkspace({ showBanner, hideBanner }) {
 
     dispose() {
       clearTimeout(state.refreshTimer);
+      void discardUnsubmittedAttachments();
       runtime.dispose();
     },
   };
