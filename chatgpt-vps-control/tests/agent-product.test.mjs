@@ -97,3 +97,34 @@ test("Browser Runner is service-worker-owned capability execution with durable f
   assert.match(broker, /__fabushiAgentBrokerSendBrowserToolResult/);
   assert.match(transports, /coordinator\.browserToolResult/);
 });
+
+
+test("Grok Agent info projects async tasks outline workflows and automations through Coordinator ownership", async () => {
+  const html = await source("app.html");
+  const workspace = await source("agent-workspace.js");
+  const broker = await source("agent-broker.js");
+
+  for (const id of [
+    "agent-async-tasks",
+    "agent-conversation-outline",
+    "agent-workflows",
+    "agent-automations",
+  ]) assert.match(html, new RegExp(`id=["']${id}["']`));
+
+  for (const method of [
+    "getAsyncTasks",
+    "getConversationOutline",
+    "getAgentWorkflows",
+    "setAgentWorkflowEnabled",
+    "getAgentAutomations",
+    "setAgentAutomationEnabled",
+    "runAgentAutomationNow",
+  ]) {
+    assert.match(workspace, new RegExp(method));
+    assert.match(broker, new RegExp(`["']${method}["']`));
+  }
+
+  assert.doesNotMatch(workspace, /setInterval\([^)]*getAsyncTasks|setInterval\([^)]*getAgentAutomations/);
+  assert.match(workspace, /family === ["']async-tasks["']/);
+  assert.match(workspace, /family === ["']outline["']/);
+});
