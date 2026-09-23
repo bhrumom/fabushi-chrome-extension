@@ -79,6 +79,7 @@ test("authoritative resync snapshot restores phase and advances the durable fenc
     phase: "thinking",
   });
   assert.equal(staleSnapshot.fence.sequence, 3);
+  assert.equal(staleSnapshot.runPhase, "completed");
 
   const nextGeneration = mergeRunSnapshot(completed, {
     runId: "run-1",
