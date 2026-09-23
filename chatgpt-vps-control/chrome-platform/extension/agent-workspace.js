@@ -130,6 +130,7 @@ export function createAgentWorkspace({ showBanner, hideBanner }) {
   const empty = $("#conversation-empty");
   const conversation = $("#conversation");
   const title = $("#conversation-title");
+  const avatar = $("#agent-avatar");
   const runState = $("#agent-run-state");
   const transportState = $("#agent-transport-state");
   const mcpList = $("#agent-mcp-list");
@@ -160,6 +161,13 @@ export function createAgentWorkspace({ showBanner, hideBanner }) {
     if (stopButton) stopButton.hidden = !state.inFlightRequestId;
   }
 
+  function avatarGlyph(agent) {
+    const source = textValue(agent?.name || agent?.id || "F").trim();
+    const parts = source.split(/\s+/).filter(Boolean);
+    if (parts.length >= 2) return `${parts[0][0] || ""}${parts[1][0] || ""}`.toUpperCase();
+    return source.slice(0, 2).toUpperCase() || "F";
+  }
+
   function renderRoster() {
     if (!roster) return;
     roster.replaceChildren();
@@ -173,8 +181,14 @@ export function createAgentWorkspace({ showBanner, hideBanner }) {
     for (const agent of filtered) {
       const button = document.createElement("button");
       button.type = "button";
+      button.className = "agent-roster-item";
       button.classList.toggle("active", agent.id === state.activeAgentId);
 
+      const icon = document.createElement("span");
+      icon.className = "agent-avatar";
+      icon.textContent = avatarGlyph(agent);
+
+      const copy = document.createElement("span");
       const strong = document.createElement("strong");
       strong.textContent = agent.name;
 
@@ -183,7 +197,8 @@ export function createAgentWorkspace({ showBanner, hideBanner }) {
         ? `waiting · ${agent.waitingReason}`
         : agent.isRunning ? "running" : "agent";
 
-      button.append(strong, meta);
+      copy.append(strong, meta);
+      button.append(icon, copy);
       button.addEventListener("click", () => void openAgent(agent.id));
       roster.append(button);
     }
@@ -203,6 +218,35 @@ export function createAgentWorkspace({ showBanner, hideBanner }) {
     group.className = "transcript-actions";
     for (const action of actions) group.append(actionButton(action.label, action.handler, { danger: action.danger, disabled: action.disabled }));
     node.append(group);
+  }
+
+  function renderReactions(node, entry) {
+    if (entry?.kind !== "send-message" || !entry?.id || entry?.message?.type === "secret-request") return;
+    const reactionRows = Array.isArray(entry.reactions) ? entry.reactions : [];
+    const mine = new Set(reactionRows
+      .filter((reaction) => reaction?.by === "me" && typeof reaction.emoji === "string")
+      .map((reaction) => reaction.emoji));
+    const counts = new Map();
+    for (const reaction of reactionRows) {
+      if (typeof reaction?.emoji !== "string" || !reaction.emoji) continue;
+      counts.set(reaction.emoji, (counts.get(reaction.emoji) || 0) + 1);
+    }
+
+    const row = document.createElement("div");
+    row.className = "reaction-row";
+    const choices = ["👍", "👎", "❤️", "🎉"];
+    for (const emoji of choices) {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "secondary-button reaction-button";
+      button.classList.toggle("active", mine.has(emoji));
+      const count = counts.get(emoji) || 0;
+      button.textContent = count > 0 ? `${emoji} ${count}` : emoji;
+      button.title = `React ${emoji}`;
+      button.addEventListener("click", () => void reactToMessage(entry, emoji));
+      row.append(button);
+    }
+    node.append(row);
   }
 
   function renderApprovalEntry(node, entry) {
@@ -330,6 +374,25 @@ export function createAgentWorkspace({ showBanner, hideBanner }) {
     node.append(title, detail);
   }
 
+  async function reactToMessage(entry, emoji) {
+    if (!state.activeAgentId || !entry?.id || !emoji) return;
+    const reactions = Array.isArray(entry.reactions) ? entry.reactions : (entry.reactions = []);
+    const mineIndex = reactions.findIndex((reaction) => reaction?.by === "me" && reaction?.emoji === emoji);
+    if (mineIndex >= 0) reactions.splice(mineIndex, 1);
+    else reactions.push({ emoji, by: "me" });
+    renderEntries();
+
+    try {
+      await coordinatorCall("reactToMessage", {
+        entryId: entry.id,
+        emoji,
+        agentId: state.activeAgentId,
+      }, { timeoutMs: 20_000 });
+    } catch {
+      scheduleTranscriptRefresh();
+    }
+  }
+
   async function resolveLocalToolPermission(entry, resolution) {
     const ask = entry?.message?.ask;
     if (!state.activeAgentId || !entry?.id || !ask?.requestId) return;
@@ -432,6 +495,7 @@ export function createAgentWorkspace({ showBanner, hideBanner }) {
       } else {
         node.textContent = copy || textValue(entry.kind || entry.type);
       }
+      renderReactions(node, entry);
       messages.append(node);
     }
 
@@ -757,6 +821,7 @@ export function createAgentWorkspace({ showBanner, hideBanner }) {
     const active = state.agents.find((agent) => agent.id === state.activeAgentId);
 
     if (title) title.textContent = active?.name || "Agent";
+    if (avatar) avatar.textContent = avatarGlyph(active || { id: state.activeAgentId, name: "Agent" });
     if (empty) empty.hidden = Boolean(state.activeAgentId);
     if (conversation) conversation.hidden = !state.activeAgentId;
 
