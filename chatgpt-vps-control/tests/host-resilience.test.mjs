@@ -69,6 +69,9 @@ test("remote userscript upgrades only to a newer version and keeps the last good
     const equal = await readRecords({ now: 20_000_000, fetcher: async () => ({ ok: true, text: async () => makeSource("2.9.65") }) });
     assert.equal(equal[0].version, "2.9.65");
     storage.set(updateKey, 0);
+    const older = await readRecords({ now: 25_000_000, fetcher: async () => ({ ok: true, text: async () => makeSource("2.9.64") }) });
+    assert.equal(older[0].version, "2.9.65");
+    storage.set(updateKey, 0);
     const offline = await readRecords({ now: 30_000_000, fetcher: async () => { throw new Error("offline"); } });
     assert.equal(offline[0].version, "2.9.65");
   } finally {
