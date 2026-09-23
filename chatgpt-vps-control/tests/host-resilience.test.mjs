@@ -10,7 +10,7 @@ const bundledPath = new URL("../chrome-platform/extension/userscript/chatgpt-aut
 test("Fabushi host keeps only the system awake while an active recovery lease exists", async () => {
   const manifest = JSON.parse(await readFile(manifestPath, "utf8"));
   const recovery = await readFile(recoveryPath, "utf8");
-  assert.equal(manifest.version, "0.6.20");
+  assert.equal(manifest.version, "0.6.21");
   assert.ok(manifest.permissions.includes("power"));
   assert.match(recovery, /requestKeepAwake\(["']system["']\)/);
   assert.doesNotMatch(recovery, /requestKeepAwake\(["']display["']\)/);
@@ -31,8 +31,8 @@ test("MV3 lifecycle and the recovery watchdog re-synchronize keep-awake state", 
 
 test("released browser package bundles the paired userscript release", async () => {
   const bundled = await readFile(bundledPath, "utf8");
-  assert.match(bundled, /^\/\/ @version\s+2\.9\.63$/m);
-  assert.match(bundled, /const VERSION = '2\.9\.63'/);
+  assert.match(bundled, /^\/\/ @version\s+2\.9\.64$/m);
+  assert.match(bundled, /const VERSION = '2\.9\.64'/);
   assert.match(bundled, /RATE_LIMIT_FRESH_RETRY_AFTER = 3/);
   assert.match(bundled, /CONVERSATION_LENGTH_CARRY_MAX/);
   assert.match(bundled, /conversationLengthLimitNotice/);
@@ -48,6 +48,9 @@ test("released browser package bundles the paired userscript release", async () 
   assert.match(bundled, /composerHasRecoveryDraft/);
   assert.match(bundled, /MEMORY_HOST_REQUEST_MIN_BYTES = 1024 \* 1024 \* 1024/);
   assert.match(bundled, /assistantTurnContent/);
+  assert.match(bundled, /retainedPreparedComposer/);
+  assert.match(bundled, /VISIBLE_SCAN_INTERVAL_MS = 4000/);
+  assert.match(bundled, /HIDDEN_SCAN_INTERVAL_MS = 15000/);
 });
 
 test("automatic tab discard accepts elevated pressure only at or above 1 GiB", () => {
