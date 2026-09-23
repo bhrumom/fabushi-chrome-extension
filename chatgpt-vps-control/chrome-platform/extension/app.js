@@ -32,9 +32,6 @@ const state = {
   desktopConnected: false,
   auth: { loggedIn: false },
   browserAccount: { loggedIn: false, connected: false },
-  conversations: [],
-  activeConversationId: "",
-  messages: new Map(),
   installed: [],
   userscripts: [],
   marketplace: [],
@@ -162,104 +159,6 @@ function activateView(name) {
   if (name === "chats") void agentWorkspace?.refresh();
   if (name === "miniapps") void refreshInstalled();
   if (name === "browser") void refreshBrowser();
-}
-
-function conversationSubtitle(item) {
-  const unread = Number(item.unreadCount || 0);
-  const kind = item.kind || "conversation";
-  return unread > 0 ? `${kind} · ${unread} 条未读` : kind;
-}
-
-function renderConversations(query = "") {
-  const needle = query.trim().toLowerCase();
-  const list = $("#chat-list");
-  list.replaceChildren();
-  const filtered = state.conversations.filter((item) => !needle || `${item.title} ${item.kind || ""}`.toLowerCase().includes(needle));
-  $("#chat-count").textContent = String(filtered.length);
-  for (const item of filtered) {
-    const button = document.createElement("button");
-    button.type = "button";
-    button.classList.toggle("active", item.id === state.activeConversationId);
-    const title = document.createElement("strong");
-    title.textContent = item.title || "未命名对话";
-    const subtitle = document.createElement("span");
-    subtitle.textContent = conversationSubtitle(item);
-    button.append(title, subtitle);
-    button.addEventListener("click", () => void openConversation(item));
-    list.append(button);
-  }
-  if (!filtered.length) {
-    const empty = document.createElement("div");
-    empty.className = "empty compact";
-    empty.innerHTML = "<p>没有匹配的聊天。</p>";
-    list.append(empty);
-  }
-}
-
-function renderMessages() {
-  const container = $("#messages");
-  container.replaceChildren();
-  const messages = state.messages.get(state.activeConversationId) || [];
-  for (const message of messages) {
-    const node = document.createElement("div");
-    node.className = `message${message.role === "user" ? " me" : ""}`;
-    node.textContent = message.text || "";
-    container.append(node);
-  }
-  container.scrollTop = container.scrollHeight;
-}
-
-async function openConversation(item) {
-  state.activeConversationId = item.id;
-  renderConversations(search.value);
-  $("#conversation-empty").hidden = true;
-  $("#conversation").hidden = false;
-  $("#conversation-title").textContent = item.title || "聊天";
-  renderMessages();
-  await desktopRequest("feature.execute", { command: { type: "conversation.open", requestId: requestId("conversation-open"), conversationId: item.id } });
-}
-
-function appendMessage(conversationId, message) {
-  const id = conversationId || state.activeConversationId || "new";
-  const current = state.messages.get(id) || [];
-  current.push(message);
-  state.messages.set(id, current.slice(-240));
-  if (id === state.activeConversationId || (!state.activeConversationId && id === "new")) renderMessages();
-}
-
-function handlePlatformEvent(event) {
-  if (!event || typeof event !== "object") return;
-  if (event.type === "conversation.listed" && Array.isArray(event.conversations)) {
-    state.conversations = event.conversations;
-    renderConversations(state.view === "chats" ? search.value : "");
-    return;
-  }
-  if (event.type === "conversation.opened") {
-    if (event.conversationId) state.activeConversationId = event.conversationId;
-    if (Array.isArray(event.messages) && event.conversationId) state.messages.set(event.conversationId, event.messages.map((message) => ({ role: message.role, text: message.text || message.content || "" })));
-    renderMessages();
-    return;
-  }
-  if (event.type === "chat.message") {
-    appendMessage(state.activeConversationId, { role: event.role, text: event.text || "" });
-    return;
-  }
-  if (event.type === "chat.delta") {
-    const id = state.activeConversationId || "new";
-    const current = state.messages.get(id) || [];
-    const last = current.at(-1);
-    if (last?.role === "assistant" && last.streaming) last.text += event.delta || "";
-    else current.push({ role: "assistant", text: event.delta || "", streaming: true });
-    state.messages.set(id, current);
-    renderMessages();
-    return;
-  }
-  if (["operation.completed", "operation.failed", "operation.interrupted"].includes(event.type)) {
-    const id = state.activeConversationId || "new";
-    const current = state.messages.get(id) || [];
-    if (current.at(-1)?.streaming) current.at(-1).streaming = false;
-    renderMessages();
-  }
 }
 
 function marketplaceItems(result) {
@@ -1229,7 +1128,6 @@ document.addEventListener("keydown", (event) => {
   }
 });
 chrome.runtime.onMessage.addListener((message) => {
-  if (message?.type === "fabushi.platform.event") agentWorkspace?.handleLegacyPlatformEvent(message.event);
   if (message?.type === "fabushi.marketplace.updates" && message.status) {
     setMarketplaceUpdateStatus(message.status);
     if (message.status.applied?.length) void refreshUserscripts();
@@ -1241,6 +1139,6 @@ chrome.runtime.onMessage.addListener((message) => {
   }
 });
 
-agentWorkspace = createAgentWorkspace({ desktopRequest, showBanner, hideBanner });
+agentWorkspace = createAgentWorkspace({ showBanner, hideBanner });
 void agentWorkspace.start();
 await initialize();
