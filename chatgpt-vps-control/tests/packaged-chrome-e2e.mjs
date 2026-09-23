@@ -20,6 +20,12 @@ import { fileURLToPath } from "node:url";
 const extensionDir = resolve(process.argv[2] || "");
 if (!process.argv[2]) throw new Error("usage: packaged-chrome-e2e.mjs <unpacked-extension-dir>");
 await access(join(extensionDir, "manifest.json"), fsConstants.R_OK);
+const packagedManifest = JSON.parse(await readFile(join(extensionDir, "manifest.json"), "utf8"));
+const packagedProvenance = JSON.parse(await readFile(join(extensionDir, "fabushi-build-provenance.json"), "utf8"));
+const evidenceDir = process.env.FABUSHI_E2E_EVIDENCE_DIR
+  ? resolve(process.env.FABUSHI_E2E_EVIDENCE_DIR)
+  : "";
+if (evidenceDir) await mkdir(evidenceDir, { recursive: true });
 
 const here = dirname(fileURLToPath(import.meta.url));
 const hostScript = join(here, "packaged-chrome-native-host.mjs");
@@ -470,18 +476,42 @@ try {
   const finalState = await readState();
   assert.equal(finalState.sendPromptCount, 1, "prompt must not be sent twice");
   assert.ok(finalState.browserToolResultCount >= 2, "replayed Browser Runner call should replay its durable result");
-  assert.equal(await exampleTabCount(page), 1, "replayed Browser Runner call must not create a duplicate tab");
+  const finalTabCount = await exampleTabCount(page);
+  assert.equal(finalTabCount, 1, "replayed Browser Runner call must not create a duplicate tab");
   assert.equal(finalState.finalSent, true);
 
-  console.log(JSON.stringify({
+  const phase = await textContent(page.sessionId, "#agent-run-state");
+  const transcriptText = await textContent(page.sessionId, "#messages");
+  const browserVersion = await cdp.send("Browser.getVersion");
+  const evidence = {
+    schemaVersion: 1,
+    sourceSha: packagedProvenance.sourceSha,
+    extensionVersion: packagedManifest.version,
     extensionId,
-    source: "packaged",
+    chrome: {
+      product: browserVersion.product || "",
+      userAgent: browserVersion.userAgent || "",
+      protocolVersion: browserVersion.protocolVersion || "",
+    },
+    runId: finalState.runId,
+    generation: finalState.generation,
     sendPromptCount: finalState.sendPromptCount,
     resumeCount: finalState.resumeCount,
     browserToolResultCount: finalState.browserToolResultCount,
-    exampleTabCount: await exampleTabCount(page),
-    phase: await textContent(page.sessionId, "#agent-run-state")
-  }));
+    exampleTabCount: finalTabCount,
+    phase,
+    finalSent: finalState.finalSent,
+    transcriptContainsFinal: transcriptText.includes("Packaged recovery completed"),
+    lastBrowserResult: finalState.lastBrowserResult || null,
+  };
+
+  if (evidenceDir) {
+    const screenshot = await cdp.send("Page.captureScreenshot", { format: "png" }, page.sessionId);
+    await writeFile(join(evidenceDir, "packaged-chrome-final.png"), Buffer.from(screenshot.data || "", "base64"));
+    await writeFile(join(evidenceDir, "packaged-chrome-e2e.json"), JSON.stringify(evidence, null, 2) + "\n");
+  }
+
+  console.log(JSON.stringify(evidence));
 } finally {
   await stopChrome();
   if (process.env.FABUSHI_KEEP_E2E_TEMP !== "1") await rm(temp, { recursive: true, force: true });
