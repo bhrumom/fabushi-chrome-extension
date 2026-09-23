@@ -13,9 +13,9 @@
   <div class="shell">
     <aside class="sidebar">
       <div class="brand"><div class="brand-mark">F</div><div><strong>Fabushi</strong><span>Chrome</span></div></div>
-      <button class="new-chat" id="new-chat" type="button">＋ 新对话</button>
+      <button class="new-chat" id="new-chat" type="button">＋ New Agent</button>
       <nav aria-label="Fabushi">
-        <button type="button" data-view="chats" aria-current="page">聊天</button>
+        <button type="button" data-view="chats" aria-current="page">Agents</button>
         <button type="button" data-view="miniapps">小程序</button>
         <button type="button" data-view="marketplace">Marketplace</button>
         <button type="button" data-view="browser">浏览器</button>
@@ -34,7 +34,7 @@
         </div>
       </header>
       <nav class="compact-nav" aria-label="Fabushi 快速导航">
-        <button type="button" data-view="chats" aria-current="page">聊天</button>
+        <button type="button" data-view="chats" aria-current="page">Agents</button>
         <button type="button" data-view="miniapps">小程序</button>
         <button type="button" data-view="marketplace">Marketplace</button>
         <button type="button" data-view="browser">浏览器</button>
@@ -45,12 +45,107 @@
       <section id="loading" class="loading"><span class="spinner"></span><div><strong>正在启动 Fabushi 插件</strong><p>正在读取 Chrome 本地脚本和 Marketplace；桌面端是可选增强。</p></div></section>
 
       <section id="chats-view" class="view" hidden>
-        <div class="split">
-          <div class="list-panel"><div class="panel-heading"><strong>最近聊天</strong><span id="chat-count">0</span></div><div id="chat-list" class="stack"></div></div>
-          <div class="conversation-panel">
-            <div id="conversation-empty" class="empty"><div class="orb">F</div><h2>Fabushi Chrome 插件</h2><p>浏览器控制、油猴脚本和任务工作台由同一个 Fabushi 扩展承载；聊天账户同步属于可选桌面增强。</p></div>
-            <div id="conversation" hidden><div id="conversation-title" class="conversation-title"></div><div id="messages" class="messages"></div><form id="composer"><textarea id="composer-input" rows="2" placeholder="给 Fabushi 发消息…"></textarea><button type="submit">发送</button></form></div>
+        <div class="split agent-split">
+          <div class="list-panel agent-roster">
+            <div class="panel-heading"><strong>Agents</strong><span id="chat-count">0</span></div>
+            <div id="chat-list" class="stack"></div>
           </div>
+
+          <div class="conversation-panel agent-conversation">
+            <div class="agent-runbar">
+              <div class="agent-identity">
+                <span id="agent-avatar" class="agent-avatar" aria-hidden="true">F</span>
+                <div>
+                  <span class="eyebrow">Fabushi Agent · Grok 0.18 architecture</span>
+                  <div id="conversation-title" class="conversation-title">Agent</div>
+                </div>
+              </div>
+              <div class="run-statuses">
+                <span id="agent-transport-state" class="pill">coordinator unavailable</span>
+                <span id="agent-run-state" class="run-state" data-phase="recovering">recovering</span>
+                <button id="agent-reconnect-runtime" class="secondary-button context-action" type="button">Reconnect</button>
+              </div>
+            </div>
+
+            <div id="conversation-empty" class="empty">
+              <div class="orb">F</div>
+              <h2>Fabushi Agent</h2>
+              <p>Agent runs and transcripts are Coordinator/Host-owned. This extension reconnects and projects the same run after MV3 worker suspension or UI reload.</p>
+            </div>
+
+            <div id="conversation" hidden>
+              <div id="messages" class="messages" aria-live="polite"></div>
+              <div id="attachment-tray" class="attachment-tray" hidden aria-live="polite"></div>
+              <form id="composer" class="agent-composer">
+                <input
+                  id="attachment-input"
+                  type="file"
+                  multiple
+                  hidden
+                  accept="image/png,image/jpeg,image/webp,image/gif,application/pdf,text/plain,text/markdown,text/csv,text/html,application/json,application/rtf,.docx,.xlsx,.pptx"
+                />
+                <button id="attach-file" class="secondary-button attach-button" type="button" title="Attach files" aria-label="Attach files">＋</button>
+                <textarea id="composer-input" rows="2" placeholder="Message your Agent…" aria-label="Message Agent"></textarea>
+                <div class="composer-actions">
+                  <button id="stop-run" class="secondary-button" type="button" hidden>Stop</button>
+                  <button type="submit">Send</button>
+                </div>
+              </form>
+            </div>
+          </div>
+
+          <aside class="agent-context-panel" aria-label="Agent context">
+            <div class="context-section">
+              <div class="context-heading"><strong>Agent</strong></div>
+              <label class="field-label" for="agent-name-input">Name</label>
+              <input id="agent-name-input" class="context-input" type="text" autocomplete="off" />
+              <div class="context-actions">
+                <button id="agent-save-name" type="button">Save</button>
+                <button id="agent-delete" class="danger-button" type="button">Delete</button>
+              </div>
+            </div>
+
+            <div class="context-section">
+              <div class="context-heading"><strong>Account / Runtime</strong></div>
+              <div id="agent-account-status" class="context-list"></div>
+            </div>
+
+            <div class="context-section">
+              <div class="context-heading"><strong>MCP / Plugins / Tools</strong><button id="agent-refresh-context" type="button" title="Refresh context">↻</button></div>
+              <div id="agent-plugin-status" class="context-list"></div>
+              <div id="agent-mcp-list" class="context-list"></div>
+            </div>
+
+            <div class="context-section">
+              <div class="context-heading"><strong>Channels / Connectors</strong></div>
+              <div id="agent-channel-list" class="context-list"></div>
+            </div>
+
+            <div class="context-section">
+              <div class="context-heading"><strong>Async Tasks</strong></div>
+              <div id="agent-async-tasks" class="context-list"></div>
+            </div>
+
+            <div class="context-section">
+              <div class="context-heading"><strong>Conversation Outline</strong></div>
+              <div id="agent-conversation-outline" class="context-list"></div>
+            </div>
+
+            <div class="context-section">
+              <div class="context-heading"><strong>Workflows</strong></div>
+              <div id="agent-workflows" class="context-list"></div>
+            </div>
+
+            <div class="context-section">
+              <div class="context-heading"><strong>Automations</strong></div>
+              <div id="agent-automations" class="context-list"></div>
+            </div>
+
+            <div class="context-section">
+              <div class="context-heading"><strong>Computer / Browser</strong></div>
+              <div id="agent-browser-context" class="context-list"></div>
+            </div>
+          </aside>
         </div>
       </section>
 
@@ -80,7 +175,10 @@
           <article><span class="setting-icon">F</span><div><h3>Fabushi 账号</h3><p id="browser-account-detail">登录后，官方 MCP 只会发现同一账号下的这个 Chrome。</p></div><button id="browser-account-action" type="button">登录 Fabushi</button></article>
           <article><span class="setting-icon">◎</span><div><h3>统一安装更新器</h3><p>市场版本、GitHub 来源、SHA-256 校验和安装状态由同一条合同管理；油猴脚本仍可独立运行。</p></div><span id="settings-auth" class="pill">可用</span></article>
           <article><span class="setting-icon">⇄</span><div><h3>官方 MCP 浏览器直连</h3><p>完整 Bridge 命令、CDP、下载与标签页生命周期由这个插件提供。</p></div><span id="settings-browser" class="pill">检查中</span></article>
-          <article><span class="setting-icon">⚙</span><div><h3>可选桌面增强</h3><p>连接后可共享账户、聊天和计算机控制；未安装或未启动桌面端不影响 Chrome 脚本。</p></div><button id="settings-open-desktop" type="button">打开桌面设置</button></article>
+          <article><span class="setting-icon">⚙</span><div><h3>可选本地 Runtime</h3><p>Native Messaging 只是 Coordinator 的一个 transport；没有桌面端时，已配置的远程 Runtime 仍可承载 Agent。</p></div><button id="settings-open-desktop" type="button">打开本地设置</button></article>
+          <article><span class="setting-icon">?</span><div><h3>Help</h3><p>查看完整扩展、Browser Control、Agent Runtime 与恢复说明。</p></div><button id="settings-help" type="button">Documentation</button></article>
+          <article><span class="setting-icon">i</span><div><h3>About</h3><p id="settings-about-version">Fabushi Chrome</p></div><span class="pill">Grok-shaped</span></article>
+          <article><span class="setting-icon">!</span><div><h3>Feedback</h3><p>报告扩展问题时请附版本、source SHA、复现步骤；不要附密码、token 或 Cookie。</p></div><button id="settings-feedback" type="button">Report issue</button></article>
         </div>
       </section>
     </main>

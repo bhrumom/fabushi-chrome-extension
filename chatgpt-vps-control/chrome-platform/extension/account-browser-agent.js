@@ -6,6 +6,9 @@ const PROFILE_KEY = "fabushiBrowserProfileId";
 const RECONNECT_ALARM = "fabushi-account-browser-reconnect";
 const LOGIN_ALARM = "fabushi-account-browser-login";
 const HEARTBEAT_MS = 20_000;
+const CALL_REPLAY_KEY = "fabushiBrowserToolCallReplayV1";
+const MAX_CALL_REPLAY_ENTRIES = 32;
+const MAX_CALL_REPLAY_BYTES = 512 * 1024;
 
 const commandNames = ["list_tabs", "claim_tab", "cdp", "cdp_auto_attach_frame", "downloads", "tab_action", "create_tab", "cleanup_tabs", "detach", "browser_events"];
 const tools = commandNames.map((name) => ({
@@ -25,7 +28,7 @@ let account = null;
 let loginPromise = null;
 let registered = false;
 const events = [];
-const activeCalls = new Set();
+const activeCalls = new Map();
 
 // Keep account material and the in-progress login attempt out of content
 // scripts; only trusted extension pages and the service worker can read it.
@@ -54,9 +57,17 @@ async function session() {
   return (await chrome.storage.session.get(SESSION_KEY))[SESSION_KEY] || null;
 }
 
+globalThis.__fabushiGetCoordinatorAccountSession = async () => {
+  const current = await session();
+  return current?.accessToken ? { accessToken: current.accessToken } : null;
+};
+
 async function setSession(value) {
   if (value) await chrome.storage.session.set({ [SESSION_KEY]: value });
   else await chrome.storage.session.remove(SESSION_KEY);
+  queueMicrotask(() => {
+    try { globalThis.__fabushiRemoteCoordinatorAuthChanged?.(); } catch {}
+  });
 }
 
 function closeSocket(reason = "Fabushi Chrome signed out.") {
@@ -98,22 +109,74 @@ function registerBrowser() {
   }));
 }
 
+async function readCallReplay() {
+  const stored = await chrome.storage.session.get(CALL_REPLAY_KEY);
+  return Array.isArray(stored[CALL_REPLAY_KEY]) ? stored[CALL_REPLAY_KEY] : [];
+}
+
+async function cachedCallResponse(requestId) {
+  if (!requestId) return null;
+  const rows = await readCallReplay();
+  return rows.find((row) => row?.requestId === requestId)?.response || null;
+}
+
+async function cacheCallResponse(requestId, response) {
+  if (!requestId) return;
+  let replay = response;
+  const serialized = JSON.stringify(response);
+  if (serialized.length > MAX_CALL_REPLAY_BYTES) {
+    replay = {
+      type: "result",
+      requestId,
+      ok: false,
+      error: "This browser tool call already executed; its original result exceeded the durable replay limit and will not be executed twice.",
+    };
+  }
+  const rows = (await readCallReplay()).filter((row) => row?.requestId !== requestId);
+  rows.unshift({ requestId, response: replay, completedAt: Date.now() });
+  await chrome.storage.session.set({ [CALL_REPLAY_KEY]: rows.slice(0, MAX_CALL_REPLAY_ENTRIES) });
+}
+
 async function handleCall(message) {
+  const requestId = String(message.requestId || "");
+  if (!requestId) return;
+
+  const cached = await cachedCallResponse(requestId);
+  if (cached) {
+    send(cached);
+    return;
+  }
+
+  const current = activeCalls.get(requestId);
+  if (current) {
+    await current.catch(() => {});
+    const replay = await cachedCallResponse(requestId);
+    if (replay) send(replay);
+    return;
+  }
+
   const operation = runCall(message);
-  activeCalls.add(operation);
-  try { await operation; } finally { activeCalls.delete(operation); }
+  activeCalls.set(requestId, operation);
+  try {
+    await operation;
+  } finally {
+    if (activeCalls.get(requestId) === operation) activeCalls.delete(requestId);
+  }
 }
 
 async function runCall(message) {
   const requestId = String(message.requestId || "");
+  let response;
   try {
     const result = message.toolName === "browser_events"
       ? { events: events.splice(0, Math.max(1, Math.min(Number(message.arguments?.limit) || 100, 500))) }
       : await globalThis.__fabushiBrowserCommand(String(message.toolName || ""), message.arguments || {});
-    send({ type: "result", requestId, ok: true, result: { content: [{ type: "text", text: JSON.stringify(result) }], structuredContent: result } });
+    response = { type: "result", requestId, ok: true, result: { content: [{ type: "text", text: JSON.stringify(result) }], structuredContent: result } };
   } catch (error) {
-    send({ type: "result", requestId, ok: false, error: error?.message || String(error) });
+    response = { type: "result", requestId, ok: false, error: error?.message || String(error) };
   }
+  await cacheCallResponse(requestId, response);
+  send(response);
 }
 
 async function connect() {
@@ -146,7 +209,7 @@ async function connect() {
       lastError = "Fabushi 登录已失效，请重新登录。";
       account = null;
       await setSession(null);
-      await Promise.allSettled([...activeCalls]);
+      await Promise.allSettled([...activeCalls.values()]);
       await globalThis.__fabushiBrowserRevokeClaims?.();
     } else if (await session()) scheduleReconnect();
   };
@@ -210,7 +273,7 @@ async function logout() {
   await setSession(null);
   await chrome.storage.session.remove(LOGIN_KEY);
   await chrome.alarms.clear(LOGIN_ALARM);
-  await Promise.allSettled([...activeCalls]);
+  await Promise.allSettled([...activeCalls.values()]);
   await globalThis.__fabushiBrowserRevokeClaims?.();
   return { loggedIn: false };
 }

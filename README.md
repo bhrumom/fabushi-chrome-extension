@@ -41,3 +41,12 @@ When ChatGPT reports a connection interruption, the script continues in the same
 ## 0.6.22 remote ChatGPT userscript updates
 
 The extension no longer packages the ChatGPT auto-confirm userscript. It installs the canonical v2.9.65 release and automatically follows newer versions at the stable update URL. On first install and bounded update checks, it reads the stable raw GitHub update link, validates the script metadata, and updates only when `@version` increases. A network failure keeps the last known good source running. The independent task-queue userscript remains packaged.
+
+
+## Grok Bot 0.18 Chrome-extension parity
+
+The canonical product/architecture/UI parity specification is:
+
+`docs/specs/grok-bot-0.18-chrome-extension-architecture-product-ui-parity.md`
+
+The target is the Chrome-extension edition of Grok Bot 0.18 under Fabushi identity, while preserving all existing Fabushi Chrome capabilities. Migration uses per-source-file audit/disposition plus per-product-responsibility Chrome implementation; it does not require one-to-one target files.

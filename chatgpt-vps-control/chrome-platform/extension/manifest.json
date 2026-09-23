@@ -2,9 +2,9 @@
   "manifest_version": 3,
   "name": "Fabushi",
   "short_name": "Fabushi",
-  "version": "0.6.22",
+  "version": "0.7.0",
   "minimum_chrome_version": "120",
-  "description": "Fabushi for Chrome — your Fabushi workspace and a secure bridge between the desktop app and the browser you already use.",
+  "description": "Fabushi for Chrome — Grok-shaped Agent workspace plus secure Browser Control, Mini Apps, Marketplace, userscripts, and optional native/remote runtime transport.",
   "permissions": [
     "alarms",
     "debugger",
@@ -38,7 +38,6 @@
     "type": "module"
   },
   "action": {
-    "default_title": "Open Fabushi",
-    "default_popup": "app.html"
+    "default_title": "Open Fabushi"
   }
 }

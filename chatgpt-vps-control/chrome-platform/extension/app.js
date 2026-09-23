@@ -1,3 +1,4 @@
+import { createAgentWorkspace } from "./agent-workspace.js";
 import {
   compareMarketplaceVersions as compareVersions,
   marketplaceItemId,
@@ -13,7 +14,7 @@ import {
 } from "./marketplace-install.js";
 
 const views = ["chats", "miniapps", "marketplace", "browser", "settings"];
-const labels = { chats: "聊天", miniapps: "小程序", marketplace: "Marketplace", browser: "浏览器", settings: "设置" };
+const labels = { chats: "Agents", miniapps: "小程序", marketplace: "Marketplace", browser: "浏览器", settings: "设置" };
 const MARKETPLACE_API_ROOT = "https://api.ombhrum.com";
 const MARKETPLACE_USERSCRIPT_REPOSITORY = "https://github.com/bhrumom/fabushi-chatgpt-auto-confirm-userscript";
 const MARKETPLACE_USERSCRIPT_UPDATE_URL = "https://raw.githubusercontent.com/bhrumom/fabushi-chatgpt-auto-confirm-userscript/main/chatgpt-auto-confirm.user.js";
@@ -31,9 +32,6 @@ const state = {
   desktopConnected: false,
   auth: { loggedIn: false },
   browserAccount: { loggedIn: false, connected: false },
-  conversations: [],
-  activeConversationId: "",
-  messages: new Map(),
   installed: [],
   userscripts: [],
   marketplace: [],
@@ -57,6 +55,7 @@ const accountName = $("#account-name");
 const accountDetail = $("#account-detail");
 const accountAvatar = $("#account-avatar");
 const search = $("#search");
+let agentWorkspace = null;
 
 function runtimeMessage(message, timeoutMs = 30_000) {
   return new Promise((resolve, reject) => {
@@ -152,111 +151,14 @@ function activateView(name) {
   $("#view-title").textContent = labels[name];
   for (const button of navButtons) button.toggleAttribute("aria-current", button.dataset.view === name);
   for (const view of views) $(`#${view}-view`).hidden = view !== name;
-  search.placeholder = name === "marketplace" ? "搜索 Marketplace" : name === "chats" ? "搜索聊天" : "搜索 Fabushi";
+  search.placeholder = name === "marketplace" ? "搜索 Marketplace" : name === "chats" ? "Search Agents or type /command" : "搜索 Fabushi";
   if (name === "marketplace") {
     void refreshMarketplace(search.value);
     void refreshMarketplaceUpdateStatus({ check: true });
   }
+  if (name === "chats") void agentWorkspace?.refresh();
   if (name === "miniapps") void refreshInstalled();
   if (name === "browser") void refreshBrowser();
-}
-
-function conversationSubtitle(item) {
-  const unread = Number(item.unreadCount || 0);
-  const kind = item.kind || "conversation";
-  return unread > 0 ? `${kind} · ${unread} 条未读` : kind;
-}
-
-function renderConversations(query = "") {
-  const needle = query.trim().toLowerCase();
-  const list = $("#chat-list");
-  list.replaceChildren();
-  const filtered = state.conversations.filter((item) => !needle || `${item.title} ${item.kind || ""}`.toLowerCase().includes(needle));
-  $("#chat-count").textContent = String(filtered.length);
-  for (const item of filtered) {
-    const button = document.createElement("button");
-    button.type = "button";
-    button.classList.toggle("active", item.id === state.activeConversationId);
-    const title = document.createElement("strong");
-    title.textContent = item.title || "未命名对话";
-    const subtitle = document.createElement("span");
-    subtitle.textContent = conversationSubtitle(item);
-    button.append(title, subtitle);
-    button.addEventListener("click", () => void openConversation(item));
-    list.append(button);
-  }
-  if (!filtered.length) {
-    const empty = document.createElement("div");
-    empty.className = "empty compact";
-    empty.innerHTML = "<p>没有匹配的聊天。</p>";
-    list.append(empty);
-  }
-}
-
-function renderMessages() {
-  const container = $("#messages");
-  container.replaceChildren();
-  const messages = state.messages.get(state.activeConversationId) || [];
-  for (const message of messages) {
-    const node = document.createElement("div");
-    node.className = `message${message.role === "user" ? " me" : ""}`;
-    node.textContent = message.text || "";
-    container.append(node);
-  }
-  container.scrollTop = container.scrollHeight;
-}
-
-async function openConversation(item) {
-  state.activeConversationId = item.id;
-  renderConversations(search.value);
-  $("#conversation-empty").hidden = true;
-  $("#conversation").hidden = false;
-  $("#conversation-title").textContent = item.title || "聊天";
-  renderMessages();
-  await desktopRequest("feature.execute", { command: { type: "conversation.open", requestId: requestId("conversation-open"), conversationId: item.id } });
-}
-
-function appendMessage(conversationId, message) {
-  const id = conversationId || state.activeConversationId || "new";
-  const current = state.messages.get(id) || [];
-  current.push(message);
-  state.messages.set(id, current.slice(-240));
-  if (id === state.activeConversationId || (!state.activeConversationId && id === "new")) renderMessages();
-}
-
-function handlePlatformEvent(event) {
-  if (!event || typeof event !== "object") return;
-  if (event.type === "conversation.listed" && Array.isArray(event.conversations)) {
-    state.conversations = event.conversations;
-    renderConversations(state.view === "chats" ? search.value : "");
-    return;
-  }
-  if (event.type === "conversation.opened") {
-    if (event.conversationId) state.activeConversationId = event.conversationId;
-    if (Array.isArray(event.messages) && event.conversationId) state.messages.set(event.conversationId, event.messages.map((message) => ({ role: message.role, text: message.text || message.content || "" })));
-    renderMessages();
-    return;
-  }
-  if (event.type === "chat.message") {
-    appendMessage(state.activeConversationId, { role: event.role, text: event.text || "" });
-    return;
-  }
-  if (event.type === "chat.delta") {
-    const id = state.activeConversationId || "new";
-    const current = state.messages.get(id) || [];
-    const last = current.at(-1);
-    if (last?.role === "assistant" && last.streaming) last.text += event.delta || "";
-    else current.push({ role: "assistant", text: event.delta || "", streaming: true });
-    state.messages.set(id, current);
-    renderMessages();
-    return;
-  }
-  if (["operation.completed", "operation.failed", "operation.interrupted"].includes(event.type)) {
-    const id = state.activeConversationId || "new";
-    const current = state.messages.get(id) || [];
-    if (current.at(-1)?.streaming) current.at(-1).streaming = false;
-    renderMessages();
-  }
 }
 
 function marketplaceItems(result) {
@@ -1150,6 +1052,48 @@ async function connectDesktopEnhancements() {
   }
 }
 
+async function refreshAbout() {
+  const manifest = chrome.runtime.getManifest();
+  let provenance = "";
+  try {
+    const response = await fetch(chrome.runtime.getURL("fabushi-build-provenance.json"), { cache: "no-store" });
+    if (response.ok) {
+      const value = await response.json();
+      if (typeof value?.sourceSha === "string" && value.sourceSha) provenance = ` · ${value.sourceSha.slice(0, 12)}`;
+    }
+  } catch {}
+  const target = $("#settings-about-version");
+  if (target) target.textContent = `Fabushi Chrome ${manifest.version}${provenance}`;
+}
+
+async function executeSearchCommand(raw) {
+  const command = String(raw || "").trim().toLowerCase();
+  if (!command.startsWith("/")) return false;
+
+  if (command === "/new" || command === "/agent") {
+    activateView("chats");
+    await agentWorkspace?.createAgent();
+  } else if (command === "/reconnect" || command === "/recover") {
+    activateView("chats");
+    await agentWorkspace?.reconnect();
+  } else if (command === "/marketplace") {
+    activateView("marketplace");
+  } else if (command === "/miniapps" || command === "/apps") {
+    activateView("miniapps");
+  } else if (command === "/browser" || command === "/computer") {
+    activateView("browser");
+  } else if (command === "/settings" || command === "/help" || command === "/about") {
+    activateView("settings");
+  } else {
+    showBanner("Commands: /new · /reconnect · /marketplace · /miniapps · /browser · /settings · /help", "warning");
+    return true;
+  }
+
+  search.value = "";
+  agentWorkspace?.setFilter("");
+  return true;
+}
+
 async function initialize() {
   // Paint the local extension runtime first. Native Messaging discovery can
   // take seconds or be permanently unavailable and must never cover the UI
@@ -1162,9 +1106,9 @@ async function initialize() {
   // discovery. A slow Marketplace/API response must never leave every view
   // hidden or make the extension appear frozen during startup.
   loading.hidden = true;
-  activateView("marketplace");
+  activateView("chats");
   scheduleMarketplaceAutoRefresh();
-  void Promise.allSettled([refreshUserscripts(), refreshBrowserAccount()]);
+  void Promise.allSettled([refreshUserscripts(), refreshBrowserAccount(), refreshAbout()]);
   void refreshMarketplaceUpdateStatus({ check: true });
   void connectDesktopEnhancements();
 }
@@ -1172,6 +1116,12 @@ async function initialize() {
 for (const button of navButtons) button.addEventListener("click", () => activateView(button.dataset.view));
 $("#open-desktop-settings").addEventListener("click", () => void openDesktopSettings());
 $("#settings-open-desktop").addEventListener("click", () => void openDesktopSettings());
+$("#settings-help").addEventListener("click", () => {
+  void chrome.tabs.create({ url: "https://github.com/bhrumom/fabushi-chrome-extension#readme", active: true });
+});
+$("#settings-feedback").addEventListener("click", () => {
+  void chrome.tabs.create({ url: "https://github.com/bhrumom/fabushi-chrome-extension/issues/new", active: true });
+});
 $("#account-button").addEventListener("click", () => activateView("settings"));
 $("#browser-account-action").addEventListener("click", async () => {
   const type = state.browserAccount.loggedIn ? "fabushi.account.logout" : "fabushi.account.login";
@@ -1197,29 +1147,18 @@ $("#marketplace-refresh").addEventListener("click", async (event) => {
     button.disabled = false;
   }
 });
-$("#new-chat").addEventListener("click", () => {
-  state.activeConversationId = "new";
-  $("#conversation-empty").hidden = true;
-  $("#conversation").hidden = false;
-  $("#conversation-title").textContent = "新对话";
-  state.messages.set("new", []);
-  renderMessages();
-  $("#composer-input").focus();
-});
-$("#composer").addEventListener("submit", (event) => {
-  event.preventDefault();
-  const input = $("#composer-input");
-  const text = input.value.trim();
-  if (!text || !state.auth.loggedIn) return;
-  input.value = "";
-  const conversationId = state.activeConversationId === "new" ? undefined : state.activeConversationId || undefined;
-  appendMessage(state.activeConversationId || "new", { role: "user", text });
-  void desktopRequest("feature.execute", { command: { type: "chat.send", requestId: requestId("chat-send"), text, conversationId, agentId: conversationId ? undefined : "mahayana-assistant", mode: "agent" } })
-    .catch((error) => showBanner(error.message, "error"));
-});
 search.addEventListener("input", () => {
-  if (state.view === "chats") renderConversations(search.value);
+  if (search.value.trim().startsWith("/")) {
+    if (state.view === "chats") agentWorkspace?.setFilter("");
+    return;
+  }
+  if (state.view === "chats") agentWorkspace?.setFilter(search.value);
   if (state.view === "marketplace") void refreshMarketplace(search.value);
+});
+search.addEventListener("keydown", (event) => {
+  if (event.key !== "Enter" || !search.value.trim().startsWith("/")) return;
+  event.preventDefault();
+  void executeSearchCommand(search.value);
 });
 $("#import-userscript").addEventListener("change", async (event) => {
   const file = event.target.files?.[0];
@@ -1246,7 +1185,6 @@ document.addEventListener("keydown", (event) => {
   }
 });
 chrome.runtime.onMessage.addListener((message) => {
-  if (message?.type === "fabushi.platform.event") handlePlatformEvent(message.event);
   if (message?.type === "fabushi.marketplace.updates" && message.status) {
     setMarketplaceUpdateStatus(message.status);
     if (message.status.applied?.length) void refreshUserscripts();
@@ -1258,4 +1196,6 @@ chrome.runtime.onMessage.addListener((message) => {
   }
 });
 
+agentWorkspace = createAgentWorkspace({ showBanner, hideBanner });
+void agentWorkspace.start();
 await initialize();
