@@ -151,9 +151,40 @@ const transportRouter = createCoordinatorTransportRouter({
   },
 });
 
+let remoteSubscriptionTarget = null;
+let remoteUnsubscribe = null;
+
+function ensureRemoteSubscription() {
+  const remote = globalThis.__fabushiRemoteCoordinatorTransport || null;
+  if (remote === remoteSubscriptionTarget) return;
+  try { remoteUnsubscribe?.(); } catch {}
+  remoteSubscriptionTarget = remote;
+  remoteUnsubscribe = null;
+  if (!remote || typeof remote.subscribe !== "function") return;
+
+  const unsubscribe = remote.subscribe((value) => {
+    if (value?.kind === "lifecycle" || value?.kind === "event" || value?.kind === "reply" || value?.kind === "request" || value?.kind === "cancel") {
+      void acceptCoordinatorFrame(value);
+      return;
+    }
+    if (typeof value?.family === "string") void routeCoordinatorEvent(value.family, value.payload);
+  });
+  if (typeof unsubscribe === "function") remoteUnsubscribe = unsubscribe;
+}
+
+globalThis.__fabushiAgentBrokerSendBrowserToolResult = async (result) => {
+  const sent = await transportRouter.browserToolResult({
+    clientId: "chrome-browser-runner",
+    result,
+  });
+  transportState = sent.transport;
+  return sent.value;
+};
+
 async function discoverTransport() {
   try {
     transportState = await transportRouter.status();
+    if (transportState.kind === "remote") ensureRemoteSubscription();
     return transportState;
   } catch (error) {
     transportState = {
@@ -233,13 +264,36 @@ async function updateRecoveryCursor(family, payload) {
   return acceptedByAny;
 }
 
+async function routeCoordinatorEvent(family, payload) {
+  const browserRunner = globalThis.__fabushiBrowserRunnerHandleCoordinatorEvent;
+  if (typeof browserRunner === "function") {
+    try {
+      if (await browserRunner(family, payload)) return true;
+    } catch (error) {
+      await broadcast("browser-runner-lifecycle", {
+        event: "ToolCompleted",
+        phase: "thinking",
+        ok: false,
+        error: error?.message || String(error),
+      });
+      return true;
+    }
+  }
+
+  if (await updateRecoveryCursor(family, payload)) {
+    await broadcast(family, payload);
+    return true;
+  }
+  return false;
+}
+
 async function acceptCoordinatorFrame(value) {
   const intake = parseCoordinatorFrame(value);
   if (!intake.accepted) return false;
   const frame = intake.frame;
 
   if (frame.kind === "event") {
-    if (await updateRecoveryCursor(frame.family, frame.payload)) await broadcast(frame.family, frame.payload);
+    await routeCoordinatorEvent(frame.family, frame.payload);
     return true;
   }
 
@@ -269,10 +323,7 @@ globalThis.__fabushiAgentBrokerPlatformEvent = (event) => {
     return;
   }
   if (event.type === "coordinator.event" && typeof event.family === "string") {
-    void updateRecoveryCursor(event.family, event.payload).then((accepted) => {
-      if (accepted) return broadcast(event.family, event.payload);
-      return undefined;
-    });
+    void routeCoordinatorEvent(event.family, event.payload);
   }
 };
 
