@@ -101,6 +101,9 @@ export function createAgentWorkspace({ showBanner, hideBanner }) {
     phase: "recovering",
     transport: { kind: "none", connected: false },
     mcp: [],
+    pluginSync: { status: "loading", authBlocked: [], error: "" },
+    channels: { status: "idle", manifests: [], connections: [], error: "" },
+    account: { loggedIn: false, loggingIn: false, connected: false, account: null, error: "" },
     browser: { connected: false, tabs: [] },
     attachments: [],
     inFlightRequestId: "",
@@ -118,6 +121,9 @@ export function createAgentWorkspace({ showBanner, hideBanner }) {
   const runState = $("#agent-run-state");
   const transportState = $("#agent-transport-state");
   const mcpList = $("#agent-mcp-list");
+  const pluginStatus = $("#agent-plugin-status");
+  const channelList = $("#agent-channel-list");
+  const accountStatus = $("#agent-account-status");
   const browserList = $("#agent-browser-context");
   const agentName = $("#agent-name-input");
   const stopButton = $("#stop-run");
