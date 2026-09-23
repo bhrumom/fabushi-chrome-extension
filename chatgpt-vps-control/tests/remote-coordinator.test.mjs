@@ -60,6 +60,15 @@ function latestSocket() {
   return FakeWebSocket.instances.at(-1);
 }
 
+async function waitForSocket() {
+  for (let attempt = 0; attempt < 40; attempt += 1) {
+    const socket = latestSocket();
+    if (socket) return socket;
+    await new Promise((resolve) => setImmediate(resolve));
+  }
+  return null;
+}
+
 async function readyTransport(factory) {
   const transport = factory({
     url: "wss://fabushi-mcp.ombhrum.com/coordinator",
@@ -67,7 +76,7 @@ async function readyTransport(factory) {
     alarms: { create() {} },
   });
   const statusPromise = transport.status();
-  const socket = latestSocket();
+  const socket = await waitForSocket();
   assert.ok(socket);
   assert.equal(socket.url, "wss://fabushi-mcp.ombhrum.com/coordinator");
   assert.equal(socket.url.includes("short-lived-token"), false);
@@ -166,7 +175,8 @@ test("remote Coordinator never automatically resends an unknown-delivery request
   );
 
   const reconnectPromise = transport.reconnect();
-  const next = latestSocket();
+  const next = await waitForSocket();
+  assert.ok(next);
   assert.notEqual(next, socket);
   next.open();
   next.message({ kind: "authenticated", protocolVersion: 1 });
