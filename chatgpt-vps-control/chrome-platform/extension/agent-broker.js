@@ -10,6 +10,23 @@ import { createCoordinatorTransportRouter } from "./coordinator-transports.js";
 
 const CLIENT_STATE_KEY = "fabushiAgentClientStateV1";
 const MAX_CLIENTS = 8;
+const MAX_ATTACHMENT_BYTES = 8 * 1024 * 1024;
+const ALLOWED_ATTACHMENT_MIME = new Set([
+  "application/json",
+  "application/pdf",
+  "application/rtf",
+  "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+  "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+  "image/gif",
+  "image/jpeg",
+  "image/png",
+  "image/webp",
+  "text/csv",
+  "text/html",
+  "text/markdown",
+  "text/plain",
+]);
 const COORDINATOR_METHODS = new Set([
   "getAgentTranscriptWindow", "getAgentThread", "getAgentTranscriptTail", "openAgentTail",
   "sendPrompt", "promptAcceptanceStatus", "respondToWidget", "resolveAutoReviewApproval",
@@ -328,6 +345,56 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
   if (message.type === "fabushi.agent.detach") {
     return respond(removeClient(clientId).then(() => ({ detached: true })));
+  }
+
+  if (message.type === "fabushi.agent.attachment.stage") {
+    const attachment = message.attachment;
+    const name = String(attachment?.name || "").trim();
+    const mimeType = String(attachment?.mimeType || "application/octet-stream").toLowerCase();
+    const size = Number(attachment?.size || 0);
+    const bytesBase64 = String(attachment?.bytesBase64 || "");
+    const attachmentId = String(attachment?.attachmentId || "");
+
+    if (!attachmentId || !name || name.length > 512 || !Number.isSafeInteger(size) || size <= 0 || size > MAX_ATTACHMENT_BYTES) {
+      sendResponse({ ok: false, code: "invalid-attachment", delivery: "not-sent", error: "Attachment name or size is invalid." });
+      return false;
+    }
+    if (!ALLOWED_ATTACHMENT_MIME.has(mimeType)) {
+      sendResponse({ ok: false, code: "unsupported-attachment", delivery: "not-sent", error: `Unsupported attachment type: ${mimeType}` });
+      return false;
+    }
+    const estimatedBytes = Math.floor(bytesBase64.length * 3 / 4);
+    if (!bytesBase64 || estimatedBytes < Math.max(1, size - 2) || estimatedBytes > size + 2) {
+      sendResponse({ ok: false, code: "invalid-attachment", delivery: "not-sent", error: "Attachment payload size does not match its metadata." });
+      return false;
+    }
+
+    return respond((async () => {
+      const staged = await transportRouter.stageAttachment({
+        clientId,
+        attachmentId,
+        name,
+        mimeType,
+        size,
+        bytesBase64,
+      });
+      transportState = staged.transport;
+      return { result: staged.value, transport: transportState };
+    })());
+  }
+
+  if (message.type === "fabushi.agent.attachment.discard") {
+    const attachmentId = String(message.attachmentId || "");
+    const reference = String(message.reference || "");
+    if (!attachmentId) {
+      sendResponse({ ok: false, code: "invalid-attachment", delivery: "not-sent", error: "Attachment id is required." });
+      return false;
+    }
+    return respond((async () => {
+      const discarded = await transportRouter.discardAttachment({ clientId, attachmentId, reference });
+      transportState = discarded.transport;
+      return { result: discarded.value, transport: transportState };
+    })());
   }
 
   if (message.type === "fabushi.agent.call") {
