@@ -129,6 +129,62 @@ async function coordinatorCall(params) {
   if (method === "getAgentChannels") {
     return { manifests: [], connections: [] };
   }
+  if (method === "getAsyncTasks") {
+    return state.active ? [{
+      kind: "subagent",
+      id: "browser-runner-task",
+      label: "Browser task",
+      status: "running",
+      startedAtMs: Date.now(),
+      detail: "Packaged Chrome acceptance"
+    }] : [];
+  }
+  if (method === "getConversationOutline") {
+    const items = state.transcript.map((entry, index) => ({
+      kind: entry.role === "user" ? "user" : "assistant-text",
+      id: String(entry.id || `outline-${index}`),
+      text: String(entry.text || "")
+    }));
+    if (state.active) items.push({
+      kind: "tool-call",
+      id: "browser-tool-outline",
+      name: "browser.create_tab",
+      status: state.browserToolResultCount > 0 ? "done" : "pending",
+      summary: "Create one real browser tab"
+    });
+    return items;
+  }
+  if (method === "getAgentWorkflows") {
+    return [{
+      id: "workflow-packaged",
+      name: "Packaged browser workflow",
+      description: "Acceptance workflow projection",
+      body: "Create a browser tab and report the result.",
+      trigger: null,
+      isEnabledForAgent: true,
+      source: "user"
+    }];
+  }
+  if (method === "setAgentWorkflowEnabled") {
+    return { workflowId: String(args.workflowId || ""), isEnabled: Boolean(args.isEnabled) };
+  }
+  if (method === "getAgentAutomations") {
+    return [{
+      id: "automation-packaged",
+      name: "Packaged status check",
+      prompt: "Report packaged Chrome status.",
+      trigger: { type: "cron", schedule: "0 9 * * *" },
+      triggerDescription: "Every day at 9:00",
+      isEnabled: true,
+      runs: []
+    }];
+  }
+  if (method === "setAgentAutomationEnabled") {
+    return { automationId: String(args.automationId || ""), isEnabled: Boolean(args.isEnabled) };
+  }
+  if (method === "runAgentAutomationNow") {
+    return { automationId: String(args.automationId || ""), started: true };
+  }
   if (method === "sendPrompt") {
     const next = await mutate(async (draft) => {
       draft.sendPromptCount += 1;
