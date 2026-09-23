@@ -166,6 +166,42 @@ export function serializeRunFence(fence) {
   };
 }
 
+export function mergeRunSnapshot(snapshot = {}, value = {}) {
+  if (!record(value)) return { ...snapshot };
+
+  const fence = createRunFence(snapshot.fence || {});
+  const nextRunId = nonEmpty(value.runId) ? value.runId : fence.runId;
+  const nextGeneration = nonEmpty(value.generation) ? value.generation : fence.generation;
+  const nextSequence = Number.isSafeInteger(value.sequence) && value.sequence >= 0
+    ? value.sequence
+    : fence.sequence;
+
+  const runChanged = Boolean(nextRunId && fence.runId && nextRunId !== fence.runId);
+  const generationChanged = Boolean(nextGeneration && fence.generation && nextGeneration !== fence.generation);
+
+  if ((runChanged || generationChanged) && fence.generation) {
+    fence.retiredGenerations.add(fence.generation);
+  }
+
+  if (runChanged) {
+    fence.runId = nextRunId;
+    fence.generation = nextGeneration || "";
+    fence.sequence = nextSequence;
+  } else {
+    if (nextRunId && !fence.runId) fence.runId = nextRunId;
+    if (nextGeneration) fence.generation = nextGeneration;
+    if (generationChanged) fence.sequence = nextSequence;
+    else fence.sequence = Math.max(fence.sequence, nextSequence);
+  }
+
+  const phase = projectRunPhase("resync", value);
+  return {
+    ...snapshot,
+    ...(phase ? { runPhase: phase } : {}),
+    fence: serializeRunFence(fence),
+  };
+}
+
 export function makeRequestId(prefix = "r") {
   return `${prefix}-${Date.now()}-${crypto.randomUUID()}`;
 }
