@@ -2,6 +2,7 @@ import {
   COORDINATOR_PROTOCOL_VERSION,
   acceptRunEvent,
   createRunFence,
+  mergeRunSnapshot,
   parseCoordinatorFrame,
   projectRunPhase,
   serializeRunFence,
@@ -377,7 +378,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       let discovered = transportState;
       try { discovered = await discoverTransport(); } catch {}
       const resync = discovered.connected ? await resumeTransport(cursor, clientId) : { attempted: false, supported: false };
-      return { transport: discovered, cursor, resync, protocolVersion: COORDINATOR_PROTOCOL_VERSION };
+      const recoveredCursor = resync.supported && resync.result && typeof resync.result === "object"
+        ? await updateClient(clientId, mergeRunSnapshot(cursor, resync.result))
+        : cursor;
+      return { transport: discovered, cursor: recoveredCursor, resync, protocolVersion: COORDINATOR_PROTOCOL_VERSION };
     })());
   }
 
