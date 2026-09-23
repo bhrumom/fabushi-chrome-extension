@@ -71,7 +71,16 @@
 
             <div id="conversation" hidden>
               <div id="messages" class="messages" aria-live="polite"></div>
+              <div id="attachment-tray" class="attachment-tray" hidden aria-live="polite"></div>
               <form id="composer" class="agent-composer">
+                <input
+                  id="attachment-input"
+                  type="file"
+                  multiple
+                  hidden
+                  accept="image/png,image/jpeg,image/webp,image/gif,application/pdf,text/plain,text/markdown,text/csv,text/html,application/json,application/rtf,.docx,.xlsx,.pptx"
+                />
+                <button id="attach-file" class="secondary-button attach-button" type="button" title="Attach files" aria-label="Attach files">＋</button>
                 <textarea id="composer-input" rows="2" placeholder="Message your Agent…" aria-label="Message Agent"></textarea>
                 <div class="composer-actions">
                   <button id="stop-run" class="secondary-button" type="button" hidden>Stop</button>
