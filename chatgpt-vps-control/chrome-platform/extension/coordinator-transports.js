@@ -42,6 +42,16 @@ function remoteAdapter(provider) {
       if (typeof remote.resume !== "function") return { supported: false };
       return { supported: true, value: await remote.resume(envelope) };
     },
+    stageAttachment(envelope) {
+      if (typeof remote.stageAttachment !== "function") {
+        throw new CoordinatorTransportError("attachment-unsupported", "Remote Coordinator transport does not support Chrome attachment staging.", "not-sent", "remote");
+      }
+      return remote.stageAttachment(envelope);
+    },
+    discardAttachment(envelope) {
+      if (typeof remote.discardAttachment !== "function") return null;
+      return remote.discardAttachment(envelope);
+    },
   };
 }
 
@@ -72,6 +82,12 @@ function nativeAdapter(nativeRequest) {
         }
         throw error;
       }
+    },
+    stageAttachment(envelope) {
+      return nativeRequest("coordinator.attachment.stage", envelope, 60_000);
+    },
+    discardAttachment(envelope) {
+      return nativeRequest("coordinator.attachment.discard", envelope, 15_000);
     },
   };
 }
@@ -166,6 +182,44 @@ export function createCoordinatorTransportRouter({
         sequence,
       }));
       return { transport: status, ...result };
+    },
+
+    async stageAttachment({ clientId, attachmentId, name, mimeType, size, bytesBase64 }) {
+      const { status, adapter } = await current();
+      try {
+        const value = await adapter.stageAttachment(envelope(clientId, {
+          attachmentId,
+          name,
+          mimeType,
+          size,
+          bytesBase64,
+        }));
+        return { transport: status, value };
+      } catch (error) {
+        if (error instanceof CoordinatorTransportError) throw error;
+        throw new CoordinatorTransportError(
+          "attachment-stage-failed",
+          `${status.kind} Coordinator attachment staging failed: ${error?.message || String(error)}`,
+          "not-sent",
+          status.kind
+        );
+      }
+    },
+
+    async discardAttachment({ clientId, attachmentId, reference }) {
+      const { status, adapter } = await current();
+      try {
+        const value = await adapter.discardAttachment(envelope(clientId, { attachmentId, reference }));
+        return { transport: status, value };
+      } catch (error) {
+        if (error instanceof CoordinatorTransportError) throw error;
+        throw new CoordinatorTransportError(
+          "attachment-discard-failed",
+          `${status.kind} Coordinator attachment discard failed: ${error?.message || String(error)}`,
+          "not-sent",
+          status.kind
+        );
+      }
     },
   };
 }
