@@ -6,6 +6,7 @@ import {
   projectRunPhase,
   serializeRunFence,
 } from "./agent-protocol.js";
+import { createCoordinatorTransportRouter } from "./coordinator-transports.js";
 
 const CLIENT_STATE_KEY = "fabushiAgentClientStateV1";
 const MAX_CLIENTS = 8;
@@ -103,93 +104,49 @@ async function recoverClient(clientId, requestedAgentId = "") {
 
 async function resumeTransport(cursor, clientId) {
   if (!cursor?.activeAgentId) return { attempted: false, supported: false };
-  let status;
   try {
-    status = await discoverTransport();
+    const result = await transportRouter.resume({
+      clientId,
+      activeAgentId: cursor.activeAgentId,
+      runId: cursor.fence?.runId || "",
+      generation: cursor.fence?.generation || "",
+      sequence: Number(cursor.fence?.sequence || 0),
+    });
+    transportState = result.transport;
+    return { attempted: true, supported: result.supported, result: result.value };
   } catch (error) {
-    return { attempted: false, supported: false, error: error?.message || String(error) };
-  }
-
-  const request = {
-    protocolVersion: COORDINATOR_PROTOCOL_VERSION,
-    clientId,
-    activeAgentId: cursor.activeAgentId,
-    runId: cursor.fence?.runId || "",
-    generation: cursor.fence?.generation || "",
-    sequence: Number(cursor.fence?.sequence || 0),
-  };
-
-  try {
-    if (status.kind === "remote") {
-      const remote = remoteTransport();
-      if (typeof remote?.resume !== "function") return { attempted: false, supported: false };
-      const result = await remote.resume(request);
-      return { attempted: true, supported: true, result };
+    if (error?.code === "coordinator-unavailable") {
+      return { attempted: false, supported: false, error: error.message };
     }
-
-    const result = await globalThis.__fabushiDesktopRequest("coordinator.resume", request, 20_000);
-    return { attempted: true, supported: true, result };
-  } catch (error) {
     return { attempted: true, supported: true, error: error?.message || String(error) };
   }
 }
 
-function unavailable(message) {
-  const error = new Error(message);
-  error.code = "coordinator-unavailable";
-  error.delivery = "not-sent";
-  return error;
-}
-
-function transportLost(message) {
-  const error = new Error(message);
-  error.code = "coordinator-transport-lost";
-  error.delivery = "unknown";
-  return error;
-}
-
-function remoteTransport() {
-  const transport = globalThis.__fabushiRemoteCoordinatorTransport;
-  return transport && typeof transport.call === "function" ? transport : null;
-}
-
-async function discoverRemote() {
-  const remote = remoteTransport();
-  if (!remote) return null;
-  const status = typeof remote.status === "function"
-    ? await remote.status()
-    : { connected: true, protocolVersion: COORDINATOR_PROTOCOL_VERSION };
-  if (!status?.connected || status.protocolVersion !== COORDINATOR_PROTOCOL_VERSION) return null;
-  transportState = { kind: "remote", connected: true, protocolVersion: COORDINATOR_PROTOCOL_VERSION, error: "" };
-  return transportState;
-}
-
-async function discoverNative() {
-  if (typeof globalThis.__fabushiDesktopRequest !== "function") return null;
-  try {
-    const status = await globalThis.__fabushiDesktopRequest("coordinator.status", {
-      protocolVersion: COORDINATOR_PROTOCOL_VERSION,
-    }, 8_000);
-    if (!status || status.protocolVersion !== COORDINATOR_PROTOCOL_VERSION) return null;
-    transportState = { kind: "native", connected: true, protocolVersion: COORDINATOR_PROTOCOL_VERSION, error: "" };
-    return transportState;
-  } catch {
-    return null;
-  }
-}
+const transportRouter = createCoordinatorTransportRouter({
+  nativeRequest(method, params, timeoutMs) {
+    if (typeof globalThis.__fabushiDesktopRequest !== "function") {
+      throw new Error("Native Messaging transport is not initialized.");
+    }
+    return globalThis.__fabushiDesktopRequest(method, params, timeoutMs);
+  },
+  remoteProvider() {
+    return globalThis.__fabushiRemoteCoordinatorTransport || null;
+  },
+});
 
 async function discoverTransport() {
-  const remote = await discoverRemote().catch(() => null);
-  if (remote) return remote;
-  const native = await discoverNative();
-  if (native) return native;
-  transportState = {
-    kind: "none",
-    connected: false,
-    protocolVersion: COORDINATOR_PROTOCOL_VERSION,
-    error: "No authenticated remote Coordinator or Coordinator-capable native host is available.",
-  };
-  throw unavailable(transportState.error);
+  try {
+    transportState = await transportRouter.status();
+    return transportState;
+  } catch (error) {
+    transportState = {
+      kind: "none",
+      connected: false,
+      protocolVersion: COORDINATOR_PROTOCOL_VERSION,
+      error: error?.message || String(error),
+    };
+    throw error;
+  }
 }
 
 async function callTransport(method, args, requestId, clientId) {
@@ -199,49 +156,15 @@ async function callTransport(method, args, requestId, clientId) {
     error.delivery = "not-sent";
     throw error;
   }
-
-  const status = await discoverTransport();
-  if (status.kind === "remote") {
-    try {
-      return await remoteTransport().call({
-        protocolVersion: COORDINATOR_PROTOCOL_VERSION,
-        requestId,
-        method,
-        args,
-        clientId,
-      });
-    } catch (error) {
-      transportState = { ...transportState, connected: false, error: error?.message || String(error) };
-      throw transportLost(`Remote Coordinator transport was lost after dispatch: ${transportState.error}`);
-    }
-  }
-
-  try {
-    return await globalThis.__fabushiDesktopRequest("coordinator.call", {
-      protocolVersion: COORDINATOR_PROTOCOL_VERSION,
-      requestId,
-      method,
-      args,
-      clientId,
-    }, 60_000);
-  } catch (error) {
-    transportState = { ...transportState, connected: false, error: error?.message || String(error) };
-    throw transportLost(`Native Coordinator transport was lost after dispatch: ${transportState.error}`);
-  }
+  const result = await transportRouter.call({ clientId, requestId, method, args });
+  transportState = result.transport;
+  return result.value;
 }
 
 async function cancelTransport(requestId, clientId) {
-  const status = await discoverTransport();
-  if (status.kind === "remote") {
-    const remote = remoteTransport();
-    if (typeof remote.cancel !== "function") throw unavailable("Remote Coordinator transport does not expose cancellation.");
-    return remote.cancel({ protocolVersion: COORDINATOR_PROTOCOL_VERSION, requestId, clientId });
-  }
-  return globalThis.__fabushiDesktopRequest("coordinator.cancel", {
-    protocolVersion: COORDINATOR_PROTOCOL_VERSION,
-    requestId,
-    clientId,
-  }, 15_000);
+  const result = await transportRouter.cancel({ clientId, requestId });
+  transportState = result.transport;
+  return result.value;
 }
 
 async function broadcast(family, payload) {
