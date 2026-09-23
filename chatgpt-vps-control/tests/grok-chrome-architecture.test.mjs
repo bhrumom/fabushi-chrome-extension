@@ -39,7 +39,7 @@ test("Agent renderer uses a typed platform runtime and the worker remains a brok
 test("unknown delivery never falls back to a duplicate legacy send", async () => {
   const workspace = await source("agent-workspace.js");
   assert.match(workspace, /error\?\.code !== "coordinator-unavailable" \|\| error\?\.delivery !== "not-sent"/);
-  assert.match(workspace, /will resync this run instead of sending the prompt again/);
+  assert.match(workspace, /will resync this run instead of sending the prompt/);
 });
 
 test("existing Chrome-native capabilities remain imported beside the Agent broker", async () => {
@@ -94,4 +94,25 @@ test("shipping Agent workspace has one Coordinator client and no hidden legacy c
   assert.doesNotMatch(workspace, /feature\.execute|chat\.send|legacy-native|handleLegacyPlatformEvent/);
   assert.doesNotMatch(app, /conversation\.listed|conversation\.opened|chat\.delta|handlePlatformEvent/);
   assert.match(app, /createAgentWorkspace/);
+});
+
+
+test("Chrome-native attachments use staging references instead of arbitrary local paths", async () => {
+  const html = await source("app.html");
+  const runtime = await source("extension-runtime.js");
+  const workspace = await source("agent-workspace.js");
+  const broker = await source("agent-broker.js");
+  const transports = await source("coordinator-transports.js");
+
+  assert.match(html, /id="attachment-input"/);
+  assert.match(html, /id="attachment-tray"/);
+  assert.match(workspace, /stageFiles/);
+  assert.match(workspace, /dragover/);
+  assert.match(workspace, /clipboardData/);
+  assert.match(workspace, /attachmentPaths:\s*promptAttachments\.map/);
+  assert.doesNotMatch(workspace, /webkitRelativePath|file\.path|showOpenFilePicker/);
+  assert.match(runtime, /fabushi\.agent\.attachment\.stage/);
+  assert.match(broker, /MAX_ATTACHMENT_BYTES = 8 \* 1024 \* 1024/);
+  assert.match(broker, /ALLOWED_ATTACHMENT_MIME/);
+  assert.match(transports, /coordinator\.attachment\.stage/);
 });
