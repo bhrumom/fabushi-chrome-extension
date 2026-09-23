@@ -151,7 +151,7 @@ function activateView(name) {
   $("#view-title").textContent = labels[name];
   for (const button of navButtons) button.toggleAttribute("aria-current", button.dataset.view === name);
   for (const view of views) $(`#${view}-view`).hidden = view !== name;
-  search.placeholder = name === "marketplace" ? "搜索 Marketplace" : name === "chats" ? "搜索 Agents" : "搜索 Fabushi";
+  search.placeholder = name === "marketplace" ? "搜索 Marketplace" : name === "chats" ? "Search Agents or type /command" : "搜索 Fabushi";
   if (name === "marketplace") {
     void refreshMarketplace(search.value);
     void refreshMarketplaceUpdateStatus({ check: true });
@@ -1052,6 +1052,48 @@ async function connectDesktopEnhancements() {
   }
 }
 
+async function refreshAbout() {
+  const manifest = chrome.runtime.getManifest();
+  let provenance = "";
+  try {
+    const response = await fetch(chrome.runtime.getURL("fabushi-build-provenance.json"), { cache: "no-store" });
+    if (response.ok) {
+      const value = await response.json();
+      if (typeof value?.sourceSha === "string" && value.sourceSha) provenance = ` · ${value.sourceSha.slice(0, 12)}`;
+    }
+  } catch {}
+  const target = $("#settings-about-version");
+  if (target) target.textContent = `Fabushi Chrome ${manifest.version}${provenance}`;
+}
+
+async function executeSearchCommand(raw) {
+  const command = String(raw || "").trim().toLowerCase();
+  if (!command.startsWith("/")) return false;
+
+  if (command === "/new" || command === "/agent") {
+    activateView("chats");
+    await agentWorkspace?.createAgent();
+  } else if (command === "/reconnect" || command === "/recover") {
+    activateView("chats");
+    await agentWorkspace?.reconnect();
+  } else if (command === "/marketplace") {
+    activateView("marketplace");
+  } else if (command === "/miniapps" || command === "/apps") {
+    activateView("miniapps");
+  } else if (command === "/browser" || command === "/computer") {
+    activateView("browser");
+  } else if (command === "/settings" || command === "/help" || command === "/about") {
+    activateView("settings");
+  } else {
+    showBanner("Commands: /new · /reconnect · /marketplace · /miniapps · /browser · /settings · /help", "warning");
+    return true;
+  }
+
+  search.value = "";
+  agentWorkspace?.setFilter("");
+  return true;
+}
+
 async function initialize() {
   // Paint the local extension runtime first. Native Messaging discovery can
   // take seconds or be permanently unavailable and must never cover the UI
@@ -1066,7 +1108,7 @@ async function initialize() {
   loading.hidden = true;
   activateView("chats");
   scheduleMarketplaceAutoRefresh();
-  void Promise.allSettled([refreshUserscripts(), refreshBrowserAccount()]);
+  void Promise.allSettled([refreshUserscripts(), refreshBrowserAccount(), refreshAbout()]);
   void refreshMarketplaceUpdateStatus({ check: true });
   void connectDesktopEnhancements();
 }
@@ -1074,6 +1116,12 @@ async function initialize() {
 for (const button of navButtons) button.addEventListener("click", () => activateView(button.dataset.view));
 $("#open-desktop-settings").addEventListener("click", () => void openDesktopSettings());
 $("#settings-open-desktop").addEventListener("click", () => void openDesktopSettings());
+$("#settings-help").addEventListener("click", () => {
+  void chrome.tabs.create({ url: "https://github.com/bhrumom/fabushi-chrome-extension#readme", active: true });
+});
+$("#settings-feedback").addEventListener("click", () => {
+  void chrome.tabs.create({ url: "https://github.com/bhrumom/fabushi-chrome-extension/issues/new", active: true });
+});
 $("#account-button").addEventListener("click", () => activateView("settings"));
 $("#browser-account-action").addEventListener("click", async () => {
   const type = state.browserAccount.loggedIn ? "fabushi.account.logout" : "fabushi.account.login";
@@ -1100,8 +1148,17 @@ $("#marketplace-refresh").addEventListener("click", async (event) => {
   }
 });
 search.addEventListener("input", () => {
+  if (search.value.trim().startsWith("/")) {
+    if (state.view === "chats") agentWorkspace?.setFilter("");
+    return;
+  }
   if (state.view === "chats") agentWorkspace?.setFilter(search.value);
   if (state.view === "marketplace") void refreshMarketplace(search.value);
+});
+search.addEventListener("keydown", (event) => {
+  if (event.key !== "Enter" || !search.value.trim().startsWith("/")) return;
+  event.preventDefault();
+  void executeSearchCommand(search.value);
 });
 $("#import-userscript").addEventListener("change", async (event) => {
   const file = event.target.files?.[0];
