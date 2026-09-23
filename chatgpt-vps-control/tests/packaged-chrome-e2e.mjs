@@ -391,13 +391,14 @@ async function waitNative(page) {
     await extensionMessage(page, { type: "fabushi.platform.reconnect" });
     await sleep(150);
     lastPlatform = await extensionMessage(page, { type: "fabushi.platform.status" });
+    lastUiState = await textContent(page.sessionId, "#agent-transport-state");
 
-    if (lastPlatform.response?.connected === true) {
+    if (lastPlatform.response?.connected === true && !lastUiState.includes("native connected")) {
       await evaluate(page.sessionId, `document.querySelector("#agent-reconnect-runtime")?.click(); true`);
       await sleep(150);
+      lastUiState = await textContent(page.sessionId, "#agent-transport-state");
     }
 
-    lastUiState = await textContent(page.sessionId, "#agent-transport-state");
     lastDesktopState = await textContent(page.sessionId, "#desktop-state");
     if (lastUiState.includes("native connected")) {
       await waitFor(
@@ -472,6 +473,7 @@ try {
   page = await openApp(extensionId);
   await waitNative(page);
   await waitFor(async () => (await readState()).resumeCount >= 2, "Service Worker recovery Coordinator resume", 25_000);
+  await waitFor(async () => (await readState()).finalSent === true, "Coordinator terminal settlement", 25_000);
   await waitFor(async () => (await textContent(page.sessionId, "#agent-run-state")).includes("completed"), "terminal completed phase", 25_000);
   await waitFor(async () => (await textContent(page.sessionId, "#messages")).includes("Packaged recovery completed"), "final transcript", 25_000);
 
