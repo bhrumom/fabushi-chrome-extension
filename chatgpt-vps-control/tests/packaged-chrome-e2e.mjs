@@ -142,8 +142,7 @@ const child = spawn(chromeBin, [
   "--disable-sync",
   "--metrics-recording-only",
   `--user-data-dir=${profile}`,
-  `--disable-extensions-except=${extensionDir}`,
-  `--load-extension=${extensionDir}`,
+  "--enable-unsafe-extension-debugging",
   "--remote-debugging-pipe",
   "about:blank"
 ], {
@@ -339,12 +338,8 @@ async function exampleTabCount(page) {
 }
 
 try {
-  let extensionId = "";
-  try {
-    extensionId = await extensionIdFromManager();
-  } catch {
-    extensionId = await waitFor(extensionIdFromProfile, "installed unpacked extension ID", 10_000);
-  }
+  const loadedExtension = await cdp.send("Extensions.loadUnpacked", { path: extensionDir });
+  const extensionId = String(loadedExtension.id || "");
   assert.match(extensionId, /^[a-p]{32}$/);
 
   const hostManifest = {
