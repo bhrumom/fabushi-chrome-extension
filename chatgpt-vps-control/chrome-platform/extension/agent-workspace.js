@@ -3,6 +3,14 @@ import { projectRunPhase } from "./agent-protocol.js";
 
 const MAX_ATTACHMENT_BYTES = 8 * 1024 * 1024;
 const MAX_ATTACHMENTS = 4;
+const PLUGIN_AUTH_AGENT_PURPOSE = "plugin-auth";
+const PLUGIN_AUTH_AGENT_NAME = "Plugin Setup";
+const PLUGIN_AUTH_PROMPT = [
+  "Some installed plugins cannot be fetched because your runtime does not yet have access to their private source repositories.",
+  "Set up the required git authentication on the computer you control, not inside the Chrome renderer.",
+  "When you need a device code, password, 2FA, OAuth approval, or any secret, ask me through the normal waiting-user flow instead of printing or guessing it.",
+  "After setup, verify access with a read-only repository check and tell me which plugins are now available.",
+].join(" ");
 const ATTACHMENT_MIME_BY_EXTENSION = Object.freeze({
   ".csv": "text/csv",
   ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
@@ -324,6 +332,163 @@ export function createAgentWorkspace({ showBanner, hideBanner }) {
         local.error = error?.message || String(error);
       }
       renderAttachments();
+    }
+  }
+
+  function actionButton(label, handler, options = {}) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = options.danger ? "danger-button context-action" : "secondary-button context-action";
+    button.textContent = label;
+    button.disabled = options.disabled === true;
+    button.addEventListener("click", handler);
+    return button;
+  }
+
+  function renderAccount() {
+    if (!accountStatus) return;
+    accountStatus.replaceChildren();
+
+    const summary = document.createElement("div");
+    summary.className = "context-row";
+    const user = state.account.account?.user || state.account.account || null;
+    const identity = textValue(user?.nickname || user?.username || user?.email);
+    summary.textContent = state.account.loggingIn
+      ? "Fabushi sign-in in progress"
+      : state.account.loggedIn
+        ? `${identity || "Fabushi account"} · ${state.account.connected ? "browser MCP connected" : "session ready"}`
+        : "Signed out";
+    accountStatus.append(summary);
+
+    if (state.account.error) {
+      const error = document.createElement("div");
+      error.className = "context-muted context-error";
+      error.textContent = state.account.error;
+      accountStatus.append(error);
+    }
+
+    if (state.account.loggedIn) {
+      accountStatus.append(actionButton("Sign out", () => void accountLogout(), { danger: true }));
+    } else {
+      accountStatus.append(actionButton(
+        state.account.loggingIn ? "Signing in…" : "Sign in",
+        () => void accountLogin(),
+        { disabled: state.account.loggingIn }
+      ));
+    }
+  }
+
+  function renderPlugins() {
+    if (!pluginStatus) return;
+    pluginStatus.replaceChildren();
+
+    if (state.pluginSync.status === "loading") {
+      const row = document.createElement("div");
+      row.className = "context-muted";
+      row.textContent = "Checking installed plugin sync…";
+      pluginStatus.append(row);
+      return;
+    }
+
+    if (state.pluginSync.status === "failed") {
+      const row = document.createElement("div");
+      row.className = "context-row context-error";
+      row.textContent = state.pluginSync.error || "Plugin sync status unavailable.";
+      pluginStatus.append(row);
+      pluginStatus.append(actionButton("Retry", () => void refreshPluginStatus()));
+      return;
+    }
+
+    const blocked = state.pluginSync.authBlocked;
+    if (!blocked.length) {
+      const row = document.createElement("div");
+      row.className = "context-muted";
+      row.textContent = "Plugin source authentication is ready.";
+      pluginStatus.append(row);
+      return;
+    }
+
+    const row = document.createElement("div");
+    row.className = "context-row";
+    const names = blocked.slice(0, 3).map((item) => item.pluginName).filter(Boolean);
+    row.textContent = names.length
+      ? `${names.join(", ")}${blocked.length > names.length ? ` +${blocked.length - names.length}` : ""} need setup`
+      : `${blocked.length} installed plugin${blocked.length === 1 ? "" : "s"} need setup`;
+    pluginStatus.append(row);
+    pluginStatus.append(actionButton("Fix with Setup Agent", () => void fixPluginAuthentication()));
+  }
+
+  function renderChannels() {
+    if (!channelList) return;
+    channelList.replaceChildren();
+
+    if (!state.activeAgentId) {
+      const row = document.createElement("div");
+      row.className = "context-muted";
+      row.textContent = "Choose an Agent to view connectors.";
+      channelList.append(row);
+      return;
+    }
+
+    if (state.channels.status === "loading") {
+      const row = document.createElement("div");
+      row.className = "context-muted";
+      row.textContent = "Loading connectors…";
+      channelList.append(row);
+      return;
+    }
+
+    if (state.channels.status === "failed") {
+      const row = document.createElement("div");
+      row.className = "context-row context-error";
+      row.textContent = state.channels.error || "Connector status unavailable.";
+      channelList.append(row);
+      channelList.append(actionButton("Retry", () => void refreshChannels()));
+      return;
+    }
+
+    const connections = new Map(state.channels.connections.map((item) => [item.platform, item]));
+    const manifests = state.channels.manifests;
+
+    if (!manifests.length && !state.channels.connections.length) {
+      const row = document.createElement("div");
+      row.className = "context-muted";
+      row.textContent = "No Agent connectors reported.";
+      channelList.append(row);
+      return;
+    }
+
+    for (const manifest of manifests) {
+      const row = document.createElement("div");
+      row.className = "context-row context-row-actions";
+
+      const copy = document.createElement("div");
+      const name = document.createElement("strong");
+      name.textContent = textValue(manifest.displayName || manifest.platform) || "Connector";
+      const detail = document.createElement("div");
+      detail.className = "context-muted";
+      const connection = connections.get(manifest.platform);
+      detail.textContent = manifest.availability === "coming-soon"
+        ? "Soon"
+        : connection?.status === "connected"
+          ? `Connected as ${textValue(connection.label) || "account"}`
+          : connection?.status === "error"
+            ? textValue(connection.detail) || "Needs attention"
+            : textValue(manifest.blurb) || "Available";
+      copy.append(name, detail);
+      row.append(copy);
+
+      if (manifest.availability !== "coming-soon") {
+        if (connection?.status === "connected") {
+          row.append(
+            actionButton("Refresh", () => void refreshChannel(manifest.platform)),
+            actionButton("Disconnect", () => void disconnectChannel(manifest.platform), { danger: true })
+          );
+        } else {
+          row.append(actionButton("Set up with Agent", () => void startChannelSetup(manifest)));
+        }
+      }
+      channelList.append(row);
     }
   }
 
