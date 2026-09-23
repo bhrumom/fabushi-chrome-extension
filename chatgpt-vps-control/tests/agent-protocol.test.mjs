@@ -48,3 +48,49 @@ test("canonical Grok run phases are projected without inventing Host state", asy
   assert.equal(projectRunPhase("client-side-tool-v2", { kind: "tool-call" }), "tool-running");
   assert.equal(projectRunPhase("transport", { state: "reconnecting" }), "recovering");
 });
+
+
+test("authoritative resync snapshot restores phase and advances the durable fence without moving backward", async () => {
+  const { mergeRunSnapshot } = await loadProtocol();
+  const prior = {
+    activeAgentId: "agent-1",
+    runPhase: "recovering",
+    fence: { runId: "run-1", generation: "g1", sequence: 2, retiredGenerations: [] },
+  };
+
+  const completed = mergeRunSnapshot(prior, {
+    runId: "run-1",
+    generation: "g1",
+    sequence: 3,
+    phase: "completed",
+  });
+  assert.equal(completed.runPhase, "completed");
+  assert.deepEqual(completed.fence, {
+    runId: "run-1",
+    generation: "g1",
+    sequence: 3,
+    retiredGenerations: [],
+  });
+
+  const staleSnapshot = mergeRunSnapshot(completed, {
+    runId: "run-1",
+    generation: "g1",
+    sequence: 1,
+    phase: "thinking",
+  });
+  assert.equal(staleSnapshot.fence.sequence, 3);
+
+  const nextGeneration = mergeRunSnapshot(completed, {
+    runId: "run-1",
+    generation: "g2",
+    sequence: 1,
+    phase: "thinking",
+  });
+  assert.equal(nextGeneration.runPhase, "thinking");
+  assert.deepEqual(nextGeneration.fence, {
+    runId: "run-1",
+    generation: "g2",
+    sequence: 1,
+    retiredGenerations: ["g1"],
+  });
+});
