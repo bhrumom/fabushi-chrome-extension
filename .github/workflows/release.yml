@@ -133,3 +133,4 @@ jobs:
             dist/fabushi-chrome-*.zip
             dist/fabushi-chrome-*.zip.sha256
             dist/fabushi-chrome-*.content-sha256
+            dist/e2e/**
