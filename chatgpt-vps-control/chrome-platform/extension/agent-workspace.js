@@ -113,6 +113,7 @@ export function createAgentWorkspace({ showBanner, hideBanner }) {
     phase: "recovering",
     transport: { kind: "none", connected: false },
     mcp: [],
+    mcpResults: {},
     pluginSync: { status: "loading", authBlocked: [], error: "" },
     channels: { status: "idle", manifests: [], connections: [], error: "" },
     account: { loggedIn: false, loggingIn: false, connected: false, account: null, error: "" },
@@ -686,6 +687,7 @@ export function createAgentWorkspace({ showBanner, hideBanner }) {
       row.className = "context-muted";
       row.textContent = "Plugin source authentication is ready.";
       pluginStatus.append(row);
+      pluginStatus.append(actionButton("Sync plugin skills", () => void syncPluginSkills()));
       return;
     }
 
@@ -696,7 +698,13 @@ export function createAgentWorkspace({ showBanner, hideBanner }) {
       ? `${names.join(", ")}${blocked.length > names.length ? ` +${blocked.length - names.length}` : ""} need setup`
       : `${blocked.length} installed plugin${blocked.length === 1 ? "" : "s"} need setup`;
     pluginStatus.append(row);
-    pluginStatus.append(actionButton("Fix with Setup Agent", () => void fixPluginAuthentication()));
+    const actions = document.createElement("div");
+    actions.className = "context-actions";
+    actions.append(
+      actionButton("Fix with Setup Agent", () => void fixPluginAuthentication()),
+      actionButton("Sync", () => void syncPluginSkills())
+    );
+    pluginStatus.append(actions);
   }
 
   function renderChannels() {
@@ -783,9 +791,31 @@ export function createAgentWorkspace({ showBanner, hideBanner }) {
       const shown = state.mcp.slice(0, 12);
       for (const tool of shown) {
         const row = document.createElement("div");
-        row.className = "context-row";
-        row.textContent = textValue(tool.title || tool.name || tool.toolName) || "MCP tool";
+        row.className = "context-row context-row-actions";
+
+        const copy = document.createElement("div");
+        const name = document.createElement("strong");
+        name.textContent = textValue(tool.title || tool.name || tool.toolName) || "MCP tool";
+        const detail = document.createElement("div");
+        detail.className = "context-muted";
+        const provider = textValue(tool.providerIdentifier);
+        const status = tool.isDisabled === true ? "disabled" : "ready";
+        detail.textContent = provider ? `${provider} · ${status}` : status;
+        copy.append(name, detail);
+        row.append(copy);
+
+        if (canTestMcpTool(tool) && state.activeAgentId) {
+          row.append(actionButton("Test", () => void testMcpTool(tool)));
+        }
         mcpList.append(row);
+
+        const result = state.mcpResults[textValue(tool.name)];
+        if (result) {
+          const output = document.createElement("div");
+          output.className = result.ok ? "context-muted" : "context-muted context-error";
+          output.textContent = result.text;
+          mcpList.append(output);
+        }
       }
       if (!shown.length) {
         const row = document.createElement("div");
@@ -1083,6 +1113,65 @@ export function createAgentWorkspace({ showBanner, hideBanner }) {
       "After the connection is established, verify it with a non-destructive status check and report the connected account label.",
     ].filter(Boolean).join(" ");
     await sendDirectPrompt(state.activeAgentId, prompt);
+  }
+
+  function canTestMcpTool(tool) {
+    if (!tool || typeof tool !== "object" || tool.isDisabled === true) return false;
+    const label = `${textValue(tool.name)} ${textValue(tool.toolName)} ${textValue(tool.description)}`.toLowerCase();
+    const readOnly = /(^|[^a-z])(read|search|find|list|get|fetch|query|lookup|inspect|view|download|retrieve)([^a-z]|$)/.test(label)
+      && !/(send|create|update|delete|remove|write|upload|post|reply|archive|move|rename|modify|cancel|purchase|buy)/.test(label);
+    const required = Array.isArray(tool.inputSchema?.required) ? tool.inputSchema.required : [];
+    return readOnly && required.length === 0
+      && Boolean(textValue(tool.providerIdentifier))
+      && Boolean(textValue(tool.name))
+      && Boolean(textValue(tool.toolName));
+  }
+
+  function summarizeMcpResult(value) {
+    const content = Array.isArray(value?.content) ? value.content : [];
+    const textItem = content.find((item) => item?.type === "text" && typeof item.text === "string");
+    if (textItem?.text) return textItem.text.slice(0, 320);
+    try {
+      return JSON.stringify(value).slice(0, 320);
+    } catch {
+      return "MCP tool returned a non-serializable result.";
+    }
+  }
+
+  async function testMcpTool(tool) {
+    if (!state.activeAgentId || !canTestMcpTool(tool)) return;
+    const key = textValue(tool.name);
+    state.mcpResults[key] = { ok: true, text: "Running read-only test…" };
+    renderContext();
+    try {
+      const result = await coordinatorCall("executeRoutedMcpTool", {
+        providerIdentifier: tool.providerIdentifier,
+        name: tool.name,
+        toolName: tool.toolName,
+        args: {},
+        toolCallId: crypto.randomUUID(),
+        agentId: state.activeAgentId,
+      }, { timeoutMs: 60_000 });
+      state.mcpResults[key] = {
+        ok: result?.isError !== true,
+        text: summarizeMcpResult(result),
+      };
+    } catch (error) {
+      state.mcpResults[key] = { ok: false, text: error?.message || String(error) };
+    }
+    renderContext();
+  }
+
+  async function syncPluginSkills() {
+    state.pluginSync = { ...state.pluginSync, status: "loading", error: "" };
+    renderContext();
+    try {
+      await coordinatorCall("syncPluginSkills", {}, { timeoutMs: 60_000 });
+      await Promise.allSettled([refreshPluginStatus(), refreshMcp()]);
+    } catch (error) {
+      state.pluginSync = { status: "failed", authBlocked: state.pluginSync.authBlocked || [], error: error?.message || String(error) };
+      renderContext();
+    }
   }
 
   async function refreshMcp() {
