@@ -116,3 +116,25 @@ test("Chrome-native attachments use staging references instead of arbitrary loca
   assert.match(broker, /ALLOWED_ATTACHMENT_MIME/);
   assert.match(transports, /coordinator\.attachment\.stage/);
 });
+
+
+test("shipping remote Coordinator is authenticated, service-worker-only, and registered before the broker", async () => {
+  const worker = await source("service-worker.js");
+  const remote = await source("remote-coordinator.js");
+  const account = await source("account-browser-agent.js");
+  const runtime = await source("extension-runtime.js");
+  const workspace = await source("agent-workspace.js");
+
+  assert.match(worker, /remote-coordinator\.js/);
+  assert.ok(worker.indexOf('account-browser-agent.js') < worker.indexOf('remote-coordinator.js'));
+  assert.ok(worker.indexOf('remote-coordinator.js') < worker.indexOf('agent-broker.js'));
+
+  assert.match(remote, /wss:\/\/fabushi-mcp\.ombhrum\.com\/coordinator/);
+  assert.match(remote, /kind:\s*["']authenticate["']/);
+  assert.match(remote, /accessToken:\s*current\.accessToken/);
+  assert.match(remote, /clearPending\(lastError\)/);
+  assert.doesNotMatch(remote, /\?accessToken=|searchParams\.set\([^)]*token/i);
+
+  assert.match(account, /__fabushiGetCoordinatorAccountSession/);
+  assert.doesNotMatch(`${runtime}\n${workspace}`, /__fabushiGetCoordinatorAccountSession|short-lived-token|accessToken:\s*current\.accessToken/);
+});
