@@ -51,7 +51,7 @@ function textValue(value) {
 
 function asArray(value) {
   if (Array.isArray(value)) return value;
-  for (const key of ["agents", "items", "results", "tools", "entries"]) {
+  for (const key of ["agents", "items", "results", "tools", "entries", "tasks", "workflows", "automations"]) {
     if (Array.isArray(value?.[key])) return value[key];
   }
   return [];
@@ -1208,6 +1208,124 @@ export function createAgentWorkspace({ showBanner, hideBanner }) {
       })
       : [];
     return { manifests, connections };
+  }
+
+  async function refreshAsyncTasks() {
+    if (!state.activeAgentId) {
+      state.asyncTasks = { status: "idle", items: [], error: "" };
+      renderContext();
+      return;
+    }
+    state.asyncTasks = { ...state.asyncTasks, status: "loading", error: "" };
+    renderContext();
+    try {
+      const result = await coordinatorCall("getAsyncTasks", { id: state.activeAgentId }, { timeoutMs: 20_000 });
+      state.asyncTasks = { status: "ready", items: asArray(result).slice(0, 16), error: "" };
+    } catch (error) {
+      state.asyncTasks = { status: "failed", items: state.asyncTasks.items || [], error: error?.message || String(error) };
+    }
+    renderContext();
+  }
+
+  async function refreshOutline() {
+    if (!state.activeAgentId) {
+      state.outline = { status: "idle", items: [], error: "" };
+      renderContext();
+      return;
+    }
+    state.outline = { ...state.outline, status: "loading", error: "" };
+    renderContext();
+    try {
+      const result = await coordinatorCall("getConversationOutline", { id: state.activeAgentId }, { timeoutMs: 20_000 });
+      state.outline = { status: "ready", items: asArray(result).slice(-20), error: "" };
+    } catch (error) {
+      state.outline = { status: "failed", items: state.outline.items || [], error: error?.message || String(error) };
+    }
+    renderContext();
+  }
+
+  async function refreshWorkflows() {
+    if (!state.activeAgentId) {
+      state.workflows = { status: "idle", items: [], error: "" };
+      renderContext();
+      return;
+    }
+    state.workflows = { ...state.workflows, status: "loading", error: "" };
+    renderContext();
+    try {
+      const result = await coordinatorCall("getAgentWorkflows", { id: state.activeAgentId }, { timeoutMs: 20_000 });
+      state.workflows = { status: "ready", items: asArray(result).slice(0, 24), error: "" };
+    } catch (error) {
+      state.workflows = { status: "failed", items: state.workflows.items || [], error: error?.message || String(error) };
+    }
+    renderContext();
+  }
+
+  async function setWorkflowEnabled(workflow, isEnabled) {
+    if (!state.activeAgentId || !textValue(workflow?.id)) return;
+    try {
+      await coordinatorCall("setAgentWorkflowEnabled", {
+        id: state.activeAgentId,
+        workflowId: workflow.id,
+        isEnabled: Boolean(isEnabled),
+      }, { timeoutMs: 30_000 });
+      await refreshWorkflows();
+    } catch (error) {
+      showBanner?.(error?.message || String(error), "error");
+    }
+  }
+
+  async function refreshAutomations() {
+    if (!state.activeAgentId) {
+      state.automations = { status: "idle", items: [], error: "" };
+      renderContext();
+      return;
+    }
+    state.automations = { ...state.automations, status: "loading", error: "" };
+    renderContext();
+    try {
+      const result = await coordinatorCall("getAgentAutomations", { id: state.activeAgentId }, { timeoutMs: 20_000 });
+      state.automations = { status: "ready", items: asArray(result).slice(0, 24), error: "" };
+    } catch (error) {
+      state.automations = { status: "failed", items: state.automations.items || [], error: error?.message || String(error) };
+    }
+    renderContext();
+  }
+
+  async function setAutomationEnabled(automation, isEnabled) {
+    if (!state.activeAgentId || !textValue(automation?.id)) return;
+    try {
+      await coordinatorCall("setAgentAutomationEnabled", {
+        id: state.activeAgentId,
+        automationId: automation.id,
+        isEnabled: Boolean(isEnabled),
+      }, { timeoutMs: 30_000 });
+      await refreshAutomations();
+    } catch (error) {
+      showBanner?.(error?.message || String(error), "error");
+    }
+  }
+
+  async function runAutomationNow(automation) {
+    if (!state.activeAgentId || !textValue(automation?.id)) return;
+    try {
+      await coordinatorCall("runAgentAutomationNow", {
+        id: state.activeAgentId,
+        automationId: automation.id,
+      }, { timeoutMs: 60_000 });
+      await refreshAutomations();
+    } catch (error) {
+      showBanner?.(error?.message || String(error), "error");
+    }
+  }
+
+  async function refreshAgentInfo() {
+    await Promise.allSettled([
+      refreshAsyncTasks(),
+      refreshOutline(),
+      refreshWorkflows(),
+      refreshAutomations(),
+    ]);
   }
 
   async function refreshChannels() {
