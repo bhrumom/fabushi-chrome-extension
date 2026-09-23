@@ -1,5 +1,5 @@
 import { normalizeUserScript } from "./userscript-core.js";
-import { installUserScript, loadBundledRecord, readRecords } from "./userscript-runner.js";
+import { installUserScript, loadRemoteRecord, readRecords } from "./userscript-runner.js";
 import {
   compareMarketplaceVersions,
   marketplaceInstallContract,
@@ -274,8 +274,8 @@ async function readInstalledRecords() {
   try {
     const records = await readRecords();
     if (records.some((record) => installedPluginId(record) === BUNDLED_PLUGIN_ID)) return records;
-    const bundled = await loadBundledRecord();
-    return [...records, bundled];
+    const remoteRecord = await loadRemoteRecord();
+    return [...records, remoteRecord];
   } catch {
     return [];
   }

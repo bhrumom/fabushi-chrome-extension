@@ -9,9 +9,9 @@ Product builds, CI, Releases, and dependency boundaries are maintained here inde
 after the migration acceptance gates pass. Do not add credentials or source paths owned by
 another platform repository.
 
-Current browser release candidate: `0.6.21`. It bundles ChatGPT userscript `2.9.64` and declares
-stable Tampermonkey-style `@updateURL` / `@downloadURL` metadata. Marketplace remains the
-first-install/discovery surface; subsequent userscript releases are checked from that URL.
+Current browser release candidate: `0.6.22`. It does not bundle the ChatGPT auto-confirm
+userscript. The extension fetches the stable `@updateURL` / `@downloadURL`, compares `@version`,
+and upgrades the installed script while retaining its enabled state and identity.
 
 
 ## 0.6.15 host resilience
@@ -36,4 +36,8 @@ The host bundles canonical userscript v2.9.46. Same-route loading recovery now p
 
 ## 0.6.21 same-chat recovery + memory-pressure discard
 
-The host bundles canonical userscript v2.9.64. When ChatGPT reports a connection interruption, the script continues in the same conversation and detects a completed response even when its own `继续完成所有` recovery draft is already present. The host accepts automatic elevated-pressure discard requests only at a JS heap estimate of at least 1 GiB; active tabs, unsafe workspaces, and requests inside the cooldown remain protected. Chrome unloads a discarded background tab and reloads it when selected; this does not clear memory from the active tab.
+When ChatGPT reports a connection interruption, the script continues in the same conversation and detects a completed response even when its own `继续完成所有` recovery draft is already present. The host accepts automatic elevated-pressure discard requests only at a JS heap estimate of at least 1 GiB; active tabs, unsafe workspaces, and requests inside the cooldown remain protected. Chrome unloads a discarded background tab and reloads it when selected; this does not clear memory from the active tab.
+
+## 0.6.22 remote ChatGPT userscript updates
+
+The extension no longer packages the ChatGPT auto-confirm userscript. It installs the canonical v2.9.65 release and automatically follows newer versions at the stable update URL. On first install and bounded update checks, it reads the stable raw GitHub update link, validates the script metadata, and updates only when `@version` increases. A network failure keeps the last known good source running. The independent task-queue userscript remains packaged.

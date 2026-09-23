@@ -3,7 +3,10 @@ import { MEMORY_DISCARD_COOLDOWN_MS, MEMORY_PLUGIN_ID, validateMemoryRequest } f
 
 const STORAGE_KEY = "fabushi.userscripts.v1";
 const BUNDLED_PLUGIN_ID = "chatgpt-auto-confirm";
-const BUNDLED_STATE_KEY = "fabushi.bundled-chatgpt-auto-confirm.enabled";
+const BUNDLED_STATE_KEY = "fabushi.bundled-chatgpt-auto-confirm.enabled"; // Legacy key retained for upgrade compatibility.
+const USERSCRIPT_UPDATE_CHECKED_AT_KEY = "fabushi.chatgpt-auto-confirm.update-checked-at";
+const USERSCRIPT_UPDATE_CHECK_INTERVAL_MS = 5 * 60 * 1000;
+export const CHATGPT_USERSCRIPT_UPDATE_URL = "https://raw.githubusercontent.com/bhrumom/fabushi-chatgpt-auto-confirm-userscript/main/chatgpt-auto-confirm.user.js";
 const MAX_CALL_TIMEOUT_MS = 86_400_000;
 let reconcilePromise;
 const registerPromises = new Map();
@@ -34,54 +37,69 @@ function compareVersions(left, right) {
   return 0;
 }
 
-export async function loadBundledRecord() {
-  const response = await fetch(`${chrome.runtime.getURL('userscript/chatgpt-auto-confirm.user.js')}?update=${Date.now()}`, { cache: 'no-store' });
-  if (!response.ok) throw new Error('无法读取内置脚本');
+export async function loadRemoteRecord(fetcher = fetch) {
+  const response = await fetcher(`${CHATGPT_USERSCRIPT_UPDATE_URL}?update=${Date.now()}`, {
+    cache: 'no-store',
+    credentials: 'omit',
+    redirect: 'error',
+  });
+  if (!response.ok) throw new Error(`无法获取 ChatGPT 用户脚本（${response.status}）`);
   const source = await response.text();
   const record = normalizeUserScript(source, {
     sourcePluginId: BUNDLED_PLUGIN_ID,
+    sourceURL: CHATGPT_USERSCRIPT_UPDATE_URL,
+    updateURL: CHATGPT_USERSCRIPT_UPDATE_URL,
+    downloadURL: CHATGPT_USERSCRIPT_UPDATE_URL,
     enabled: true,
   });
-  // The script metadata is the authoritative version. Keeping it in the
-  // source-plugin field makes the installed list and Marketplace agree.
+  if (record.updateURL !== CHATGPT_USERSCRIPT_UPDATE_URL || record.downloadURL !== CHATGPT_USERSCRIPT_UPDATE_URL) {
+    throw new Error('ChatGPT 用户脚本的更新链接与 Fabushi 认可的稳定链接不一致。');
+  }
   return { ...record, sourcePluginVersion: record.version };
 }
 
-export async function readRecords() {
-  const result = await chrome.storage.local.get([STORAGE_KEY, BUNDLED_STATE_KEY]);
+export async function readRecords({ fetcher = fetch, now = Date.now() } = {}) {
+  const result = await chrome.storage.local.get([STORAGE_KEY, BUNDLED_STATE_KEY, USERSCRIPT_UPDATE_CHECKED_AT_KEY]);
   const records = Array.isArray(result?.[STORAGE_KEY]) ? result[STORAGE_KEY].filter((item) => item && typeof item === "object") : [];
-  let changed = false;
-  const bundledIndex = records.findIndex((record) => record.sourcePluginId === BUNDLED_PLUGIN_ID);
-  if (bundledIndex < 0 && result?.[BUNDLED_STATE_KEY] !== false) {
-    records.push(await loadBundledRecord());
-    changed = true;
-  } else if (bundledIndex >= 0 && result?.[BUNDLED_STATE_KEY] !== false) {
-    // An unpacked extension can receive a newer bundled script without a
-    // fresh install. Upgrade the persisted record in place, preserving the
-    // user's enabled/disabled choice and the stable script id.
-    try {
-      const bundled = await loadBundledRecord();
-      const current = records[bundledIndex];
-      const currentVersion = current.version || current.sourcePluginVersion || "";
-      if (compareVersions(bundled.version, currentVersion) > 0) {
-        const replacement = {
-          ...bundled,
-          id: current.id || bundled.id,
-          installedAt: Number(current.installedAt) || bundled.installedAt,
-          enabled: current.enabled !== false,
-          commands: Array.isArray(current.commands) && current.commands.length ? current.commands : bundled.commands,
-        };
-        records[bundledIndex] = replacement;
-        if (replacement.enabled !== false) {
-          await registerUserScript(replacement).catch((error) => console.warn("[Fabushi] 内置用户脚本升级注册失败", error));
+  const managedIndex = records.findIndex((record) => record.sourcePluginId === BUNDLED_PLUGIN_ID);
+  if (result?.[BUNDLED_STATE_KEY] !== false) {
+    const shouldCheck = managedIndex < 0
+      || now - (Number(result?.[USERSCRIPT_UPDATE_CHECKED_AT_KEY]) || 0) >= USERSCRIPT_UPDATE_CHECK_INTERVAL_MS;
+    if (shouldCheck) {
+      try {
+        const remote = await loadRemoteRecord(fetcher);
+        await chrome.storage.local.set({ [USERSCRIPT_UPDATE_CHECKED_AT_KEY]: now });
+        let changed = false;
+        if (managedIndex < 0) {
+          records.push(remote);
+          changed = true;
+        } else {
+          const current = records[managedIndex];
+          if (compareVersions(remote.version, current.version || current.sourcePluginVersion) > 0) {
+            const replacement = {
+              ...remote,
+              id: current.id || remote.id,
+              installedAt: Number(current.installedAt) || remote.installedAt,
+              enabled: current.enabled !== false,
+              commands: Array.isArray(current.commands) && current.commands.length ? current.commands : remote.commands,
+            };
+            records[managedIndex] = replacement;
+            changed = true;
+            if (replacement.enabled !== false) {
+              await registerUserScript(replacement).catch((error) => console.warn("[Fabushi] 远程用户脚本升级注册失败", error));
+            }
+          }
         }
-        changed = true;
+        if (changed) await writeRecords(records);
+      } catch (error) {
+        if (managedIndex < 0) throw error;
+        // Keep the last known good script when the remote update link is
+        // temporarily unavailable; the next bounded check can retry later.
+        await chrome.storage.local.set({ [USERSCRIPT_UPDATE_CHECKED_AT_KEY]: now }).catch(() => {});
+        console.warn("[Fabushi] 远程用户脚本版本检查失败，继续使用已安装版本", error);
       }
-    } catch (error) {
-      console.warn("[Fabushi] 内置用户脚本版本检查失败", error);
     }
   }
-  if (changed) await writeRecords(records);
   return records;
 }
 

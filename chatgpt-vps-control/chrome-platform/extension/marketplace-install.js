@@ -175,7 +175,7 @@ export function marketplaceItemInstallable(item) {
 
 export function marketplaceInstalledVersion(item, installed, userscript) {
   if (userscript) {
-    return String(item?.bundledFallback
+    return String((item?.bundledFallback || item?.remoteUpdateFallback)
       ? userscript.version
       : (userscript.sourcePluginVersion || userscript.version || "")).trim();
   }
