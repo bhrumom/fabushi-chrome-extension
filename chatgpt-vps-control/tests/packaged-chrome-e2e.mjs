@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { spawn } from "node:child_process";
 import {
   access,
@@ -93,14 +94,14 @@ class CdpPipe {
     }
   }
 
-  send(method, params = {}, sessionId) {
+  send(method, params = {}, sessionId, timeoutMs = 15_000) {
     const id = ++this.nextId;
     const message = { id, method, params, ...(sessionId ? { sessionId } : {}) };
     return new Promise((resolvePromise, reject) => {
       const timer = setTimeout(() => {
         this.pending.delete(id);
         reject(new Error(`CDP timeout: ${method}`));
-      }, 15_000);
+      }, timeoutMs);
       this.pending.set(id, { resolve: resolvePromise, reject, timer, method });
       this.child.stdio[3].write(Buffer.from(JSON.stringify(message) + "\0"));
     });
@@ -128,6 +129,36 @@ async function waitFor(check, label, timeoutMs = 20_000, intervalMs = 100) {
 
 async function readState() {
   return JSON.parse(await readFile(statePath, "utf8"));
+}
+
+function unpackedExtensionId(pathname) {
+  const digest = createHash("sha256").update(resolve(pathname), "utf8").digest();
+  let id = "";
+  for (const byte of digest.subarray(0, 16)) {
+    id += String.fromCharCode(97 + ((byte >> 4) & 15));
+    id += String.fromCharCode(97 + (byte & 15));
+  }
+  return id;
+}
+
+const extensionId = unpackedExtensionId(extensionDir);
+assert.match(extensionId, /^[a-p]{32}$/);
+
+const hostManifest = {
+  name: "com.fabushi.chrome_platform",
+  description: "Fabushi packaged Chrome E2E native Coordinator fixture",
+  path: hostExecutable,
+  type: "stdio",
+  allowed_origins: [`chrome-extension://${extensionId}/`]
+};
+
+const hostDirs = [
+  join(homedir(), ".config", "google-chrome", "NativeMessagingHosts"),
+  join(homedir(), ".config", "chromium", "NativeMessagingHosts")
+];
+for (const directory of hostDirs) {
+  await mkdir(directory, { recursive: true });
+  await writeFile(join(directory, "com.fabushi.chrome_platform.json"), JSON.stringify(hostManifest, null, 2) + "\n");
 }
 
 let stderr = "";
@@ -176,10 +207,37 @@ async function stopChrome() {
   cdp = null;
 }
 
-launchChrome({ loadExtension: true });
+launchChrome();
 
 async function targets() {
   return (await cdp.send("Target.getTargets")).targetInfos || [];
+}
+
+async function waitForCdpReady() {
+  await waitFor(async () => {
+    try {
+      const version = await cdp.send("Browser.getVersion", {}, undefined, 3_000);
+      return Boolean(version?.product);
+    } catch {
+      return false;
+    }
+  }, "Chrome CDP ready", 25_000, 150);
+}
+
+async function loadExactExtension() {
+  await waitForCdpReady();
+  let lastError;
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      const loaded = await cdp.send("Extensions.loadUnpacked", { path: extensionDir }, undefined, 30_000);
+      assert.equal(String(loaded?.id || ""), extensionId, "Chrome loaded a different unpacked extension identity");
+      return loaded;
+    } catch (error) {
+      lastError = error;
+      if (attempt === 0) await sleep(500);
+    }
+  }
+  throw lastError;
 }
 
 async function extensionIdFromProfile() {
@@ -362,36 +420,10 @@ async function exampleTabCount(page) {
 }
 
 try {
-  const extensionId = await waitFor(async () => {
-    const fromProfile = await extensionIdFromProfile();
-    if (fromProfile) return fromProfile;
-    return extensionIdFromManager();
-  }, "Fabushi extension id", 25_000, 250);
-  assert.match(extensionId, /^[a-p]{32}$/);
-
-  const hostManifest = {
-    name: "com.fabushi.chrome_platform",
-    description: "Fabushi packaged Chrome E2E native Coordinator fixture",
-    path: hostExecutable,
-    type: "stdio",
-    allowed_origins: [`chrome-extension://${extensionId}/`]
-  };
-
-  const hostDirs = [
-    join(homedir(), ".config", "google-chrome", "NativeMessagingHosts"),
-    join(homedir(), ".config", "chromium", "NativeMessagingHosts")
-  ];
-  for (const directory of hostDirs) {
-    await mkdir(directory, { recursive: true });
-    await writeFile(join(directory, "com.fabushi.chrome_platform.json"), JSON.stringify(hostManifest, null, 2) + "\n");
-  }
-
-  // Chrome resolves Native Messaging hosts at browser-process scope. Restart
-  // only after the exact extension ID is known and its allow-listed host
-  // manifest is on disk; the second browser still loads the same verify/
-  // package directory and the app verifies chrome.runtime.id below.
-  await stopChrome();
-  launchChrome({ loadExtension: true });
+  // Native Messaging manifest is already present before this browser process
+  // starts. Load the exact unpacked verify/ package through Chrome's extension
+  // debugging domain, then independently verify chrome.runtime.id in app.html.
+  await loadExactExtension();
 
   let page = await openApp(extensionId);
   await waitNative(page);
