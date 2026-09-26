@@ -202,7 +202,10 @@ function registerUserScript(record) {
       matches,
       excludeMatches: Array.isArray(record.excludes) ? record.excludes.filter((pattern) => /:\/\//.test(pattern)) : [],
       js: [{ code: executableSource(record) }],
-      runAt: record.runAt.replaceAll("-", "_"),
+      // The canonical ChatGPT workbench must appear while its document is
+      // loading. Its upstream @run-at is document-idle, which can defer the
+      // panel until a slow ChatGPT renderer finally reaches load/idle.
+      runAt: record.sourcePluginId === BUNDLED_PLUGIN_ID ? "document_start" : record.runAt.replaceAll("-", "_"),
       allFrames: record.noFrames !== true,
       world: record.sourcePluginId === "chatgpt-auto-confirm" ? "MAIN" : "USER_SCRIPT",
     };
@@ -233,10 +236,11 @@ async function unregisterUserScript(id) {
   await chrome.userScripts.unregister({ ids: [id] }).catch(() => {});
 }
 
-async function runMatchingScripts(tabId, url) {
+export async function runMatchingScripts(tabId, url, { requireSuccessfulMatches = false } = {}) {
   if (!Number.isInteger(tabId) || !/^https?:\/\//i.test(String(url ?? ""))) return [];
   const records = await readRecords();
   const started = [];
+  const failed = [];
   for (const record of records) {
     if (record.enabled === false || !userScriptMatches(record, url)) continue;
     const activationKey = `${tabId}:${record.id}`;
@@ -271,7 +275,11 @@ async function runMatchingScripts(tabId, url) {
       started.push(record.id);
     } catch (error) {
       console.warn(`[Fabushi] 用户脚本 ${record.name || record.id} 未能在此页面启动`, error);
+      failed.push({ id: record.id, error });
     }
+  }
+  if (requireSuccessfulMatches && failed.length) {
+    throw new Error(`匹配的用户脚本尚未启动：${failed.map(({ id, error }) => `${id}（${error?.message || error}）`).join('；')}`);
   }
   return started;
 }
@@ -412,7 +420,7 @@ if (typeof chrome !== "undefined" && chrome.runtime) {
   }
   if (message.type === "fabushi.userscript.pageReady") {
     const tabId = sender?.tab?.id;
-    void runMatchingScripts(tabId, message.url || sender?.tab?.url || "")
+    void runMatchingScripts(tabId, message.url || sender?.tab?.url || "", { requireSuccessfulMatches:true })
       .then((started) => sendResponse({ ok: true, started }))
       .catch((error) => sendResponse({ ok: false, error: error?.message || String(error) }));
     return true;
