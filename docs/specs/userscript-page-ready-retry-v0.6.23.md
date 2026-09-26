@@ -1,13 +1,13 @@
 # ChatGPT userscript page-ready retry — Specification
 
-Status: active
+Status: completed
 Owner: Fabushi Chrome extension
 Last updated: 2026-09-26
-Related issue/task/PR: recurring missing ChatGPT auto-confirm userscript on a still-loading conversation
+Related issue/task/PR: [PR #20](https://github.com/bhrumom/fabushi-chrome-extension/pull/20)
 
 ## 1. Context / problem
 
-Fabushi's document-start content bridge requests activation of matching userscripts. The host currently catches per-script registration/execution errors and returns an empty started list, while the page-ready message handler replies `ok: true`. The bridge interprets that as success and stops retrying. Its separate tab-update fallback only retries at `status: complete`, which never occurs while ChatGPT remains stuck loading. GitHub's canonical v2.9.87 source already declares `@run-at document-start`; the observed delay is in the host's failed-activation acknowledgment/retry path. Fabushi will normalize registration to document start to repair any stale persisted run timing.
+Fabushi's document-start content bridge requests activation of matching userscripts. The host caught per-script registration/execution errors and returned an empty started list, while the page-ready message handler replied `ok: true`. The bridge interpreted that as success and stopped retrying. Its separate tab-update fallback only retried at `status: complete`, which never occurs while ChatGPT remains stuck loading. GitHub's canonical v2.9.87 source already declares `@run-at document-start`; the observed delay was in the host's failed-activation acknowledgment/retry path. Fabushi now normalizes registration to document start to repair any stale persisted run timing.
 
 ## 2. Goal
 
@@ -22,21 +22,21 @@ Ensure the ChatGPT workbench is registered to appear at document start, matching
 
 ## 4. Requirements
 
-- R1: For the page-ready handshake, any enabled matching userscript activation error must produce `ok: false`; an empty successful result remains valid if there are no matching enabled scripts.
-- R2: The Fabushi ChatGPT workbench is registered at `document_start`; it must not wait for ChatGPT's document completion or idle event to appear.
+- R1: For the page-ready handshake, any enabled matching userscript activation error produces `ok: false`; an empty successful result remains valid if there are no matching enabled scripts.
+- R2: The Fabushi ChatGPT workbench is registered at `document_start`; it does not wait for ChatGPT's document completion or idle event to appear.
 - R3: The content bridge retries a failed/unanswered page-ready handshake in the current document with exponential backoff capped at 30 seconds.
 - R4: A URL change bypasses the retry cooldown and triggers a handshake for the new URL, including after an older in-flight request settles.
 - R5: At most one page-ready request may be in flight per content-script instance; success stops further retries.
-- R6: Keep startup non-blocking and avoid duplicate requests while retrying.
+- R6: Startup stays non-blocking and retrying does not create duplicate requests.
 - R7: Bump Fabushi extension to v0.6.23 and release only after local validation and GitHub CI succeed.
 
 ## 5. Current state
 
-`runMatchingScripts()` logs per-record errors and returns the IDs that started. The `pageReady` handler always translates that array to `{ok:true}`, even if it is empty because activation threw. The content bridge retries once a second only until any `{ok:true}` response, and its only lifecycle fallback depends on tab completion. The latest canonical v2.9.87 source declares `@run-at document-start`; older stored registration metadata can still be stale.
+`runMatchingScripts()` logs per-record errors and returns the IDs that started. The `pageReady` handler translated that result to `{ok:true}` even when activation threw. The content bridge retried once a second only until any `{ok:true}` response, and its only lifecycle fallback depended on tab completion. The latest canonical v2.9.87 source declares `@run-at document-start`; older stored registration metadata could still be stale.
 
 ## 6. Target state
 
-The Fabushi-hosted ChatGPT script is registered at `document_start`, including when a stored record contains older timing metadata. Activation errors for matching records reject the page-ready call. The bridge keeps retrying with delays 1, 2, 4, 8, 16, then 30 seconds, without overlap. URL changes trigger immediately after any older request settles. A successful handshake ends retries.
+The Fabushi-hosted ChatGPT script is registered at `document_start`, including when a stored record contains older timing metadata. Activation errors for matching records reject the page-ready call. The bridge retries with delays 1, 2, 4, 8, 16, then 30 seconds, without overlap. URL changes trigger immediately after any older request settles. A successful handshake ends retries.
 
 ## 7. Architecture and ownership boundaries
 
@@ -48,7 +48,7 @@ The Fabushi Chrome extension owns the page bridge and host activation handshake.
 
 ## 9. Constraints and non-functional requirements
 
-Retries must not block user interaction, spin the worker at one-second frequency after failure, duplicate requests, change tabs, or navigate. Maximum retry interval is 30 seconds.
+Retries do not block user interaction, spin the worker at one-second frequency after failure, duplicate requests, change tabs, or navigate. Maximum retry interval is 30 seconds.
 
 ## 10. Failure modes and edge cases
 
@@ -61,13 +61,13 @@ Retries must not block user interaction, spin the worker at one-second frequency
 
 1. Register the canonical Fabushi ChatGPT userscript at `document_start` even if a persisted record has stale run timing, while preserving source metadata.
 2. Require successful matches for page-ready activation while preserving existing best-effort callers.
-3. Add a single-flight page-ready bridge with capped exponential backoff and URL-change reset.
+3. Add a single-flight page-ready bridge with capped exponential backoff and URL-change handling.
 4. Add regression tests for early registration, activation failure followed by success and bridge retry/success behavior.
 5. Bump manifest, README and release workflow to 0.6.23.
 
 ## 12. Verification / test strategy
 
-Run the host resilience contract test, extension syntax checks, and `git diff --check`; verify the regression test proves first activation failure is returned as failure and a subsequent retry starts the script. Require PR/main GitHub CI before tagging v0.6.23 and confirm the release asset exists.
+Local host resilience contract: 8 passing tests. All extension JavaScript passes `node --check`; `git diff --check` passes. [PR #20](https://github.com/bhrumom/fabushi-chrome-extension/pull/20) validate job and main branch validation pass. Tag workflow [36222082389](https://github.com/bhrumom/fabushi-chrome-extension/actions/runs/36222082389) completed successfully.
 
 ## 13. Acceptance criteria / Definition of Done
 
@@ -79,11 +79,11 @@ Run the host resilience contract test, extension syntax checks, and `git diff --
 
 ## 14. Release / migration / rollback
 
-No storage migration. Release v0.6.23 through the repository's validated tag workflow. v0.6.22 remains the rollback version.
+No storage migration. Published v0.6.23 through the validated tag workflow; v0.6.22 remains the rollback version. [Release v0.6.23](https://github.com/bhrumom/fabushi-chrome-extension/releases/tag/v0.6.23) contains `fabushi-chrome-0.6.23.zip`.
 
 ## 15. Observability / evidence
 
-Page-ready rejection includes the failed script identifier and activation error. Local test output and GitHub workflow/release URLs are the evidence.
+Page-ready rejection includes the failed script identifier and activation error. Evidence: local tests, [PR #20 checks](https://github.com/bhrumom/fabushi-chrome-extension/actions/runs/36222026993), [main validation](https://github.com/bhrumom/fabushi-chrome-extension/actions/runs/36222050424), and [v0.6.23 tag workflow](https://github.com/bhrumom/fabushi-chrome-extension/actions/runs/36222082389).
 
 ## 16. References / provenance
 
@@ -92,12 +92,13 @@ Page-ready rejection includes the failed script identifier and activation error.
 - `docs/specs/userscript-remote-update-link-v0.6.22.md`
 - `chatgpt-vps-control/chrome-platform/extension/userscript-runner.js`
 - `chatgpt-vps-control/chrome-platform/extension/userscript-content.js`
-- User report and screenshot dated 2026-09-26 showing Fabushi's installed userscript during an indefinitely loading ChatGPT conversation.
+- User report and screenshot dated 2026-09-26 showing the Fabushi-installed userscript during a loading ChatGPT conversation.
+- Canonical ChatGPT auto-confirm userscript v2.9.87 metadata from GitHub commit `2675666cbb93e6ab2c4238f622c9c02ec8223974`.
 
 ## 17. Spec compliance record
 
 | Requirement / AC | Status | Evidence / reason |
 | --- | --- | --- |
-| R1, R3-R6 / AC-1, AC-3-AC-4 | passed | `host-resilience.test.mjs` covers activation failure, recovery retry, capped backoff timings, success stop, route changes, single-flight behavior; all 8 tests pass. |
-| R2 / AC-2 | passed | Regression asserts that even a legacy stored `document-idle` run time registers the canonical ChatGPT script as `document_start`. |
-| R7 / AC-5 | blocked | Local syntax and contract validation pass. GitHub PR/main CI and v0.6.23 release asset are pending. |
+| R1, R3-R6 / AC-1, AC-3-AC-4 | passed | `host-resilience.test.mjs` covers activation failure, retry, capped backoff timings, success stop, SPA route changes, and in-flight single-flight behavior; all 8 tests pass. |
+| R2 / AC-2 | passed | Regression asserts that a legacy stored `document-idle` run time registers the canonical ChatGPT script as `document_start`. |
+| R7 / AC-5 | passed | PR and main validation passed; v0.6.23 tag workflow succeeded and published the Chrome extension archive. |
