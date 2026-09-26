@@ -9,7 +9,7 @@ Product builds, CI, Releases, and dependency boundaries are maintained here inde
 after the migration acceptance gates pass. Do not add credentials or source paths owned by
 another platform repository.
 
-Current browser release candidate: `0.6.22`. It does not bundle the ChatGPT auto-confirm
+Current browser release candidate: `0.6.23`. It does not bundle the ChatGPT auto-confirm
 userscript. The extension fetches the stable `@updateURL` / `@downloadURL`, compares `@version`,
 and upgrades the installed script while retaining its enabled state and identity.
 
@@ -41,3 +41,7 @@ When ChatGPT reports a connection interruption, the script continues in the same
 ## 0.6.22 remote ChatGPT userscript updates
 
 The extension no longer packages the ChatGPT auto-confirm userscript. It installs the canonical v2.9.65 release and automatically follows newer versions at the stable update URL. On first install and bounded update checks, it reads the stable raw GitHub update link, validates the script metadata, and updates only when `@version` increases. A network failure keeps the last known good source running. The independent task-queue userscript remains packaged.
+
+## 0.6.23 retry failed userscript activation
+
+Page-ready activation now reports per-script registration or execution failures instead of acknowledging them as success. The same document retries the handshake with a single in-flight request and exponential backoff capped at 30 seconds; successful activation stops retries, and ChatGPT SPA URL changes trigger an immediate handshake.

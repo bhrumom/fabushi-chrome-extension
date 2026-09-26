@@ -1,8 +1,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
+import vm from "node:vm";
 import { validateMemoryRequest } from "../chrome-platform/extension/userscript-memory-policy.js";
-import { CHATGPT_USERSCRIPT_UPDATE_URL, readRecords } from "../chrome-platform/extension/userscript-runner.js";
+import { CHATGPT_USERSCRIPT_UPDATE_URL, readRecords, runMatchingScripts } from "../chrome-platform/extension/userscript-runner.js";
 
 const manifestPath = new URL("../chrome-platform/extension/manifest.json", import.meta.url);
 const recoveryPath = new URL("../chrome-platform/extension/userscript-recovery.js", import.meta.url);
@@ -10,13 +11,132 @@ const recoveryPath = new URL("../chrome-platform/extension/userscript-recovery.j
 test("Fabushi host keeps only the system awake while an active recovery lease exists", async () => {
   const manifest = JSON.parse(await readFile(manifestPath, "utf8"));
   const recovery = await readFile(recoveryPath, "utf8");
-  assert.equal(manifest.version, "0.6.22");
+  assert.equal(manifest.version, "0.6.23");
   assert.ok(manifest.permissions.includes("power"));
   assert.match(recovery, /requestKeepAwake\(["']system["']\)/);
   assert.doesNotMatch(recovery, /requestKeepAwake\(["']display["']\)/);
   assert.match(recovery, /releaseKeepAwake\(\)/);
   assert.match(recovery, /keepAwakeNeeded/);
   assert.match(recovery, /syncKeepAwake/);
+});
+
+test("page-ready activation failure is returned to the bridge and a later retry can start the script", async () => {
+  const previousChrome = globalThis.chrome;
+  const storage = new Map();
+  let executionAttempts = 0;
+  let registration;
+  const source = `// ==UserScript==\n// @name ChatGPT 自动确认\n// @namespace fabushi\n// @version 2.9.87\n// @match https://chatgpt.com/*\n// @run-at document-start\n// @updateURL ${CHATGPT_USERSCRIPT_UPDATE_URL}\n// @downloadURL ${CHATGPT_USERSCRIPT_UPDATE_URL}\n// @grant none\n// ==/UserScript==\nvoid 0;`;
+  globalThis.chrome = {
+    storage: { local: {
+      async get(keys) { return Object.fromEntries(keys.filter((key) => storage.has(key)).map((key) => [key, storage.get(key)])); },
+      async set(values) { for (const [key, value] of Object.entries(values)) storage.set(key, value); },
+    } },
+    userScripts: {
+      async getScripts() { return []; },
+      async register(definitions) { registration = definitions[0]; },
+      async execute() {
+        executionAttempts += 1;
+        if (executionAttempts === 1) throw new Error("temporary injection fault");
+      },
+    },
+  };
+  try {
+    storage.set("fabushi.userscripts.v1", [{
+      id: "chatgpt-auto-confirm-test",
+      name: "ChatGPT 自动确认",
+      sourcePluginId: "chatgpt-auto-confirm",
+      version: "2.9.87",
+      source,
+      matches: ["https://chatgpt.com/*"],
+      excludes: [],
+      runAt: "document-idle",
+      noFrames: true,
+      enabled: true,
+    }]);
+    storage.set("fabushi.chatgpt-auto-confirm.update-checked-at", Date.now());
+    await assert.rejects(
+      runMatchingScripts(42, "https://chatgpt.com/c/stuck", { requireSuccessfulMatches: true }),
+      /chatgpt-auto-confirm-test.*temporary injection fault/,
+    );
+    assert.equal(registration.runAt, "document_start", "Fabushi ChatGPT workbench registers for the start of document loading");
+    assert.deepEqual(await runMatchingScripts(42, "https://chatgpt.com/c/stuck", { requireSuccessfulMatches: true }), ["chatgpt-auto-confirm-test"]);
+    assert.equal(executionAttempts, 2);
+  } finally {
+    if (previousChrome === undefined) delete globalThis.chrome;
+    else globalThis.chrome = previousChrome;
+  }
+});
+
+test("page-ready bridge retries with backoff, has one in-flight request, and stops after success", async () => {
+  const content = await readFile(new URL("../chrome-platform/extension/userscript-content.js", import.meta.url), "utf8");
+  let now = 0;
+  let interval;
+  let calls = 0;
+  let currentUrl = "https://chatgpt.com/c/stuck";
+  const context = {
+    Date: { now: () => now },
+    location: { get href() { return currentUrl; } },
+    chrome: { runtime: { sendMessage: async () => ({ ok: ++calls >= 3 }) } },
+    window: {
+      addEventListener() {},
+      postMessage() {},
+      setInterval(callback) { interval = callback; },
+    },
+  };
+  vm.runInNewContext(content, context);
+  const flush = async () => { await Promise.resolve(); await Promise.resolve(); };
+  await flush();
+  now = 999;
+  interval();
+  await flush();
+  assert.equal(calls, 1);
+  now = 1_000;
+  interval();
+  await flush();
+  assert.equal(calls, 2);
+  now = 2_999;
+  interval();
+  await flush();
+  assert.equal(calls, 2);
+  now = 3_000;
+  interval();
+  await flush();
+  assert.equal(calls, 3);
+  now = 60_000;
+  interval();
+  await flush();
+  assert.equal(calls, 3, "successful handshake stops polling");
+  currentUrl = "https://chatgpt.com/c/next";
+  interval();
+  await flush();
+  assert.equal(calls, 4, "URL changes trigger an immediate handshake");
+});
+
+test("an SPA route change during an in-flight page-ready handshake is not lost", async () => {
+  const content = await readFile(new URL("../chrome-platform/extension/userscript-content.js", import.meta.url), "utf8");
+  let interval;
+  let calls = 0;
+  let resolveFirst;
+  let currentUrl = "https://chatgpt.com/c/old";
+  const context = {
+    Date: { now: () => 0 },
+    location: { get href() { return currentUrl; } },
+    chrome: { runtime: { sendMessage: () => {
+      calls += 1;
+      if (calls === 1) return new Promise((resolve) => { resolveFirst = resolve; });
+      return Promise.resolve({ ok: true });
+    } } },
+    window: { addEventListener() {}, postMessage() {}, setInterval(callback) { interval = callback; } },
+  };
+  vm.runInNewContext(content, context);
+  currentUrl = "https://chatgpt.com/c/new";
+  interval();
+  assert.equal(calls, 1, "does not overlap the request already in flight");
+  resolveFirst({ ok: true });
+  await Promise.resolve();
+  await Promise.resolve();
+  await Promise.resolve();
+  assert.equal(calls, 2, "sends a fresh handshake after the stale response settles");
 });
 
 test("MV3 lifecycle and the recovery watchdog re-synchronize keep-awake state", async () => {
