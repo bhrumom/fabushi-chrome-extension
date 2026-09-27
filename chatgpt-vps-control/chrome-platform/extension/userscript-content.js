@@ -182,20 +182,50 @@ window.addEventListener("message", (event) => {
 
 let lastUrl = location.href;
 let readyAcknowledged = false;
+let readyRequestPending = false;
+let readyRetryAt = 0;
+let readyRetryDelayMs = 1_000;
 function announceReady() {
   const url = location.href;
   if (!/^https?:\/\//i.test(url)) return;
-  lastUrl = url;
+  if (url !== lastUrl) {
+    lastUrl = url;
+    readyAcknowledged = false;
+    readyRetryAt = 0;
+    readyRetryDelayMs = 1_000;
+  }
+  if (readyAcknowledged || readyRequestPending || Date.now() < readyRetryAt) return;
+  readyRequestPending = true;
   chrome.runtime.sendMessage({ type: "fabushi.userscript.pageReady", url })
     .then((response) => {
-      // An acknowledged handshake is enough to stop the one-second retry
-      // loop. A matching page can legitimately have no enabled optional
-      // userscript; repeatedly asking the service worker to inject it only
-      // creates needless churn and can race page navigation.
+      readyRequestPending = false;
+      if (location.href !== url) {
+        readyAcknowledged = false;
+        readyRetryAt = 0;
+        readyRetryDelayMs = 1_000;
+        announceReady();
+        return;
+      }
       readyAcknowledged = response?.ok === true;
+      if (readyAcknowledged) {
+        readyRetryAt = 0;
+        readyRetryDelayMs = 1_000;
+      } else {
+        readyRetryAt = Date.now() + readyRetryDelayMs;
+        readyRetryDelayMs = Math.min(readyRetryDelayMs * 2, 30_000);
+      }
     })
     .catch(() => {
+      readyRequestPending = false;
       readyAcknowledged = false;
+      if (location.href !== url) {
+        readyRetryAt = 0;
+        readyRetryDelayMs = 1_000;
+        announceReady();
+        return;
+      }
+      readyRetryAt = Date.now() + readyRetryDelayMs;
+      readyRetryDelayMs = Math.min(readyRetryDelayMs * 2, 30_000);
     });
 }
 
