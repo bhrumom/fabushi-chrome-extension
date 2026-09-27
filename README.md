@@ -45,3 +45,11 @@ The extension no longer packages the ChatGPT auto-confirm userscript. It install
 ## 0.6.23 retry failed userscript activation
 
 Page-ready activation now reports per-script registration or execution failures instead of acknowledging them as success. The same document retries the handshake with a single in-flight request and exponential backoff capped at 30 seconds; successful activation stops retries, and ChatGPT SPA URL changes trigger an immediate handshake.
+
+## Grok Bot 0.18 Chrome-extension parity
+
+The canonical product/architecture/UI parity specification is:
+
+`docs/specs/grok-bot-0.18-chrome-extension-architecture-product-ui-parity.md`
+
+The target is the Chrome-extension edition of Grok Bot 0.18 under Fabushi identity, while preserving all existing Fabushi Chrome capabilities. Migration uses per-source-file audit/disposition plus per-product-responsibility Chrome implementation; it does not require one-to-one target files.

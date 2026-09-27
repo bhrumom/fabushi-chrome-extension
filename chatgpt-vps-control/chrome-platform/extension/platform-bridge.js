@@ -69,6 +69,7 @@ function connectNative() {
       return;
     }
     if (message?.type === "platform_event") {
+      try { globalThis.__fabushiAgentBrokerPlatformEvent?.(message.event); } catch {}
       chrome.runtime.sendMessage({ type: "fabushi.platform.event", event: message.event }).catch(() => {});
     }
   });
