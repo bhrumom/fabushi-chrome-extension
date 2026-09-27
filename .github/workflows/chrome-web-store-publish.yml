@@ -1,0 +1,153 @@
+name: Chrome Web Store publish
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag to submit, for example v0.7.0
+        required: true
+        type: string
+      source_sha:
+        description: Exact source commit SHA bound to the release package
+        required: true
+        type: string
+      wait_for_published:
+        description: Poll until the store reports the revision as published
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    env:
+      RELEASE_TAG: ${{ inputs.tag }}
+      SOURCE_SHA: ${{ inputs.source_sha }}
+      WAIT_FOR_PUBLISHED: ${{ inputs.wait_for_published }}
+      CHROME_WEBSTORE_PUBLISHER_ID: ${{ secrets.CHROME_WEBSTORE_PUBLISHER_ID }}
+      CHROME_WEBSTORE_EXTENSION_ID: ${{ secrets.FABUSHI_CHROME_EXTENSION_ID }}
+      CHROME_WEBSTORE_CLIENT_ID: ${{ secrets.CHROME_WEBSTORE_CLIENT_ID }}
+      CHROME_WEBSTORE_CLIENT_SECRET: ${{ secrets.CHROME_WEBSTORE_CLIENT_SECRET }}
+      CHROME_WEBSTORE_REFRESH_TOKEN: ${{ secrets.CHROME_WEBSTORE_REFRESH_TOKEN }}
+
+    steps:
+      - name: Validate release identity
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          resolved_sha="$(gh api "repos/$GITHUB_REPOSITORY/commits/$RELEASE_TAG" --jq '.sha')"
+          test "$resolved_sha" = "$SOURCE_SHA"
+          gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null
+          echo "release_tag=$RELEASE_TAG" >> "$GITHUB_STEP_SUMMARY"
+          echo "source_sha=$SOURCE_SHA" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Download exact release package
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p release verify web-store-evidence
+          gh release download "$RELEASE_TAG"             --repo "$GITHUB_REPOSITORY"             --dir release             --pattern 'fabushi-chrome-*.zip'             --pattern 'fabushi-chrome-*.zip.sha256'             --pattern 'fabushi-chrome-*.content-sha256'
+          zip_path="$(find release -maxdepth 1 -type f -name 'fabushi-chrome-*.zip' -print -quit)"
+          test -n "$zip_path"
+          unzip -q "$zip_path" -d verify
+          version="$(node -p "require('./verify/manifest.json').version")"
+          test "$RELEASE_TAG" = "v$version"
+          test "$(node -p "require('./verify/fabushi-build-provenance.json').sourceSha")" = "$SOURCE_SHA"
+          checksum_file="release/fabushi-chrome-$version.zip.sha256"
+          test -f "$checksum_file"
+          (cd release && sha256sum -c "$(basename "$checksum_file")")
+          archive_sha="$(sha256sum "$zip_path" | awk '{print $1}')"
+          echo "ZIP_PATH=$zip_path" >> "$GITHUB_ENV"
+          echo "VERSION=$version" >> "$GITHUB_ENV"
+          echo "ARCHIVE_SHA=$archive_sha" >> "$GITHUB_ENV"
+          {
+            echo "version=$version"
+            echo "archive_sha256=$archive_sha"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Validate Web Store credentials
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$CHROME_WEBSTORE_PUBLISHER_ID"
+          test -n "$CHROME_WEBSTORE_EXTENSION_ID"
+          test -n "$CHROME_WEBSTORE_CLIENT_ID"
+          test -n "$CHROME_WEBSTORE_CLIENT_SECRET"
+          test -n "$CHROME_WEBSTORE_REFRESH_TOKEN"
+
+      - name: Upload and publish to Chrome Web Store
+        id: publish
+        shell: bash
+        run: |
+          set -euo pipefail
+          set +x
+          token_response="$(curl --fail-with-body --silent --show-error --request POST             --header 'Content-Type: application/x-www-form-urlencoded'             --data-urlencode "client_id=$CHROME_WEBSTORE_CLIENT_ID"             --data-urlencode "client_secret=$CHROME_WEBSTORE_CLIENT_SECRET"             --data-urlencode "refresh_token=$CHROME_WEBSTORE_REFRESH_TOKEN"             --data-urlencode 'grant_type=refresh_token'             https://oauth2.googleapis.com/token)"
+          access_token="$(jq -r '.access_token // empty' <<<"$token_response")"
+          test -n "$access_token"
+
+          item_name="publishers/$CHROME_WEBSTORE_PUBLISHER_ID/items/$CHROME_WEBSTORE_EXTENSION_ID"
+          upload_file="$(mktemp)"
+          upload_http="$(curl --silent --show-error --request POST             --header "Authorization: Bearer $access_token"             --header 'Content-Type: application/zip'             --data-binary "@$ZIP_PATH"             --output "$upload_file"             --write-out '%{http_code}'             "https://chromewebstore.googleapis.com/upload/v2/$item_name:upload")"
+          jq --arg status "$upload_http" '{httpStatus:($status|tonumber),response:.}' "$upload_file" > web-store-evidence/upload.json
+          [[ "$upload_http" =~ ^2 ]]
+          upload_state="$(jq -r '.uploadState // empty' "$upload_file")"
+
+          for attempt in $(seq 1 90); do
+            [ "$upload_state" = "SUCCEEDED" ] && break
+            [ "$upload_state" = "FAILED" ] && exit 1
+            sleep 20
+            status_json="$(curl --fail-with-body --silent --show-error               --header "Authorization: Bearer $access_token"               "https://chromewebstore.googleapis.com/v2/$item_name:fetchStatus")"
+            jq '{name,itemId,lastAsyncUploadState,publishedItemRevisionStatus,submittedItemRevisionStatus,takenDown,warned}'               <<<"$status_json" > web-store-evidence/status.json
+            upload_state="$(jq -r '.lastAsyncUploadState // empty' <<<"$status_json")"
+          done
+          test "$upload_state" = "SUCCEEDED"
+
+          publish_json="$(curl --fail-with-body --silent --show-error --request POST             --header "Authorization: Bearer $access_token"             --header 'Content-Type: application/json'             --data '{"publishType":"DEFAULT_PUBLISH","skipReview":false,"blockOnWarnings":true}'             "https://chromewebstore.googleapis.com/v2/$item_name:publish")"
+          jq '{name,itemId,state,warningInfo}' <<<"$publish_json" > web-store-evidence/publish.json
+          publish_state="$(jq -r '.state // empty' <<<"$publish_json")"
+          case "$publish_state" in
+            PENDING_REVIEW|STAGED|PUBLISHED) ;;
+            *) echo "Unexpected publish state: $publish_state" >&2; exit 1 ;;
+          esac
+          echo "publish_state=$publish_state" >> "$GITHUB_OUTPUT"
+          echo "Chrome Web Store submission state: $publish_state" >> "$GITHUB_STEP_SUMMARY"
+
+          if [ "$WAIT_FOR_PUBLISHED" = "true" ]; then
+            for attempt in $(seq 1 120); do
+              status_json="$(curl --fail-with-body --silent --show-error                 --header "Authorization: Bearer $access_token"                 "https://chromewebstore.googleapis.com/v2/$item_name:fetchStatus")"
+              jq '{name,itemId,lastAsyncUploadState,publishedItemRevisionStatus,submittedItemRevisionStatus,takenDown,warned}'                 <<<"$status_json" > web-store-evidence/status.json
+              published_state="$(jq -r '.publishedItemRevisionStatus.state // empty' <<<"$status_json")"
+              submitted_state="$(jq -r '.submittedItemRevisionStatus.state // empty' <<<"$status_json")"
+              [ "$published_state" = "PUBLISHED" ] && break
+              case "$submitted_state" in REJECTED|CANCELLED) exit 1 ;; esac
+              sleep 45
+            done
+            test "$(jq -r '.publishedItemRevisionStatus.state // empty' web-store-evidence/status.json)" = "PUBLISHED"
+          fi
+
+      - name: Record redacted provenance
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p web-store-evidence
+          jq -n             --arg tag "$RELEASE_TAG"             --arg sourceSha "$SOURCE_SHA"             --arg version "${VERSION:-}"             --arg archiveSha "${ARCHIVE_SHA:-}"             --arg extensionId "${CHROME_WEBSTORE_EXTENSION_ID:-not-configured}"             --arg publisherId "${CHROME_WEBSTORE_PUBLISHER_ID:-not-configured}"             --arg publishState "${{ steps.publish.outputs.publish_state || '' }}"             '{schemaVersion:1,tag:$tag,sourceSha:$sourceSha,version:$version,archiveSha256:$archiveSha,extensionId:$extensionId,publisherId:$publisherId,publishState:$publishState}'             > web-store-evidence/provenance.json
+
+      - name: Upload publication evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: chrome-web-store-publish-${{ inputs.tag }}-${{ inputs.source_sha }}
+          path: web-store-evidence/**
+          if-no-files-found: error
+          retention-days: 90
