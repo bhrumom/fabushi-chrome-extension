@@ -47,9 +47,6 @@ export function validateMemoryRequest(message, { record, tab, cooldownRemaining 
   if (!CHATGPT_URL.test(String(tab?.url || ""))) {
     return { ok:false, discarded:false, reason:"unapproved-page", tabId };
   }
-  // Chrome itself refuses to discard an active tab. Return a structured
-  // result so the userscript can ask the user to switch away from it.
-  if (tab.active === true) return { ok:true, discarded:false, reason:"active-tab", tabId };
   if (tab.discarded === true) return { ok:true, discarded:true, reason:"already-discarded", tabId };
   if (!payload.userInitiated && payload.pressure !== "high"
     && !(payload.pressure === "elevated" && payload.usedBytes >= ELEVATED_DISCARD_MIN_BYTES)) {

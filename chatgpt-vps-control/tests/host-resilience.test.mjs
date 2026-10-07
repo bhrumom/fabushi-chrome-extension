@@ -200,7 +200,7 @@ test("remote userscript upgrades only to a newer version and keeps the last good
   }
 });
 
-test("automatic tab discard accepts elevated pressure only at or above 1 GiB", () => {
+test("automatic same-tab recovery accepts active-tab pressure without replacement tabs", () => {
   const record = { sourcePluginId: "chatgpt-auto-confirm", enabled: true };
   const tab = { id: 42, url: "https://chatgpt.com/c/example", active: false, discarded: false };
   const message = (pressure, usedBytes = 1024 ** 3) => ({
@@ -217,7 +217,18 @@ test("automatic tab discard accepts elevated pressure only at or above 1 GiB", (
   assert.equal(validateMemoryRequest(message("elevated", 1024 ** 3 - 1), { record, tab }).reason, "pressure-not-elevated");
   assert.equal(validateMemoryRequest(message("high", 0), { record, tab }).reason, "ready", "high pressure retains its existing eligibility");
   assert.equal(validateMemoryRequest(message("normal", 0), { record, tab }).reason, "pressure-not-elevated");
-  assert.equal(validateMemoryRequest(message("elevated"), { record, tab: { ...tab, active:true } }).reason, "active-tab");
+  assert.equal(validateMemoryRequest(message("elevated"), { record, tab: { ...tab, active:true } }).reason, "ready");
   assert.equal(validateMemoryRequest({ ...message("elevated"), payload:{ ...message("elevated").payload, safeToDiscard:false } }, { record, tab }).reason, "unsafe-state");
   assert.equal(validateMemoryRequest({ ...message("normal"), payload:{ ...message("normal").payload, userInitiated:true } }, { record, tab }).reason, "ready", "manual requests remain pressure independent");
+});
+
+
+test("memory recovery reloads the original tab and never opens a replacement", async () => {
+  const runner = await readFile(new URL("../chrome-platform/extension/userscript-runner.js", import.meta.url), "utf8");
+  const recovery = await readFile(recoveryPath, "utf8");
+  assert.match(runner, /chrome\\.tabs\\.update\\(tabId, \{ url: String\\(tab\\.url\\) \}\)/);
+  assert.match(runner, /reason:"reloaded-same-tab"/);
+  assert.doesNotMatch(runner, /chrome\\.tabs\\.discard\\(/);
+  assert.doesNotMatch(recovery, /chrome\\.tabs\\.create\\(/);
+  assert.match(recovery, /lastRecoveryReason: "same-tab-reload-failed"/);
 });
