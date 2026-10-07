@@ -226,7 +226,7 @@ test("automatic same-tab recovery accepts active-tab pressure without replacemen
 test("memory recovery reloads the original tab and never opens a replacement", async () => {
   const runner = await readFile(new URL("../chrome-platform/extension/userscript-runner.js", import.meta.url), "utf8");
   const recovery = await readFile(recoveryPath, "utf8");
-  assert.match(runner, /chrome\\.tabs\\.update\\(tabId, \{ url: String\\(tab\\.url\\) \}\)/);
+  assert.ok(runner.includes("chrome.tabs.update(tabId, { url: String(tab.url) })"));
   assert.match(runner, /reason:"reloaded-same-tab"/);
   assert.doesNotMatch(runner, /chrome\\.tabs\\.discard\\(/);
   assert.doesNotMatch(recovery, /chrome\\.tabs\\.create\\(/);
