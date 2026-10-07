@@ -518,6 +518,6 @@ try {
   console.log(JSON.stringify(evidence));
 } finally {
   await stopChrome();
-  if (process.env.FABUSHI_KEEP_E2E_TEMP !== "1") await rm(temp, { recursive: true, force: true });
+  if (process.env.FABUSHI_KEEP_E2E_TEMP !== "1") { try { await rm(temp, { recursive: true, force: true }); } catch (error) { if (error?.code !== "ENOTEMPTY") throw error; } }
   if (stderr) process.stderr.write(stderr.slice(-12_000));
 }
