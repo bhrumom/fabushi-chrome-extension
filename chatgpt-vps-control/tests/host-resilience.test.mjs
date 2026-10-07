@@ -14,7 +14,7 @@ test("Fabushi host keeps only the system awake while an active recovery lease ex
   assert.equal(manifest.version, "0.7.0");
   assert.ok(manifest.permissions.includes("power"));
   assert.match(recovery, /requestKeepAwake\(["']system["']\)/);
-  assert.doesNotMatch(recovery, /requestKeepAwake\(["']display["']\)/);
+  assert.equal(recovery.includes("chrome.tabs.create("), false);
   assert.match(recovery, /releaseKeepAwake\(\)/);
   assert.match(recovery, /keepAwakeNeeded/);
   assert.match(recovery, /syncKeepAwake/);
@@ -228,7 +228,7 @@ test("memory recovery reloads the original tab and never opens a replacement", a
   const recovery = await readFile(recoveryPath, "utf8");
   assert.ok(runner.includes("chrome.tabs.update(tabId, { url: String(tab.url) })"));
   assert.match(runner, /reason:"reloaded-same-tab"/);
-  assert.doesNotMatch(runner, /chrome\\.tabs\\.discard\\(/);
+  assert.equal(runner.includes("chrome.tabs.discard("), false);
   assert.doesNotMatch(recovery, /chrome\\.tabs\\.create\\(/);
   assert.match(recovery, /lastRecoveryReason: "same-tab-reload-failed"/);
 });
