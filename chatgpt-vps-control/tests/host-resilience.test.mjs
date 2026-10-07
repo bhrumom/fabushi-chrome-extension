@@ -229,6 +229,6 @@ test("memory recovery reloads the original tab and never opens a replacement", a
   assert.ok(runner.includes("chrome.tabs.update(tabId, { url: String(tab.url) })"));
   assert.match(runner, /reason:"reloaded-same-tab"/);
   assert.equal(runner.includes("chrome.tabs.discard("), false);
-  assert.doesNotMatch(recovery, /chrome\\.tabs\\.create\\(/);
+  assert.equal(recovery.includes("chrome.tabs.create("), false);
   assert.match(recovery, /lastRecoveryReason: "same-tab-reload-failed"/);
 });
