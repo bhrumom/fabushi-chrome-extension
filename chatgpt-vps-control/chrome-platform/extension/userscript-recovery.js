@@ -208,7 +208,7 @@ async function recoverRecord(record, tab, reason) {
   let tabId = Number(record.tabId);
   let action = "reload";
   let reloadUsed = record.reloadUsed === true;
-  let takeoverUsed = record.takeoverUsed === true;
+  let takeoverUsed = false;
   let reloadFailed = false;
   if (!reloadUsed) {
     try {
@@ -219,18 +219,9 @@ async function recoverRecord(record, tab, reason) {
       reloadFailed = true;
     }
   }
-  if ((reloadFailed || record.reloadUsed === true) && !takeoverUsed) {
-    // The original tab already had its one recovery attempt and is still not
-    // usable, so take over exactly once in a fresh ChatGPT tab.
-    try {
-      const created = await chrome.tabs.create({ url: recoveryURL, active: true });
-      tabId = created.id;
-      action = "takeover";
-      takeoverUsed = true;
-    } catch {
-      return { ...record, status: "exhausted", reloadUsed, takeoverUsed, lastRecoveryReason: "recovery-tab-create-failed" };
-    }
-  } else if (reloadUsed && record.reloadUsed === true && takeoverUsed) {
+  if (reloadFailed) {
+    return { ...record, status: "exhausted", reloadUsed, takeoverUsed, lastRecoveryReason: "same-tab-reload-failed" };
+  } else if (reloadUsed && record.reloadUsed === true) {
     return { ...record, status: "exhausted", reloadUsed, takeoverUsed, lastRecoveryReason: "recovery-budget-exhausted" };
   }
   return {

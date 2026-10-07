@@ -372,10 +372,15 @@ async function requestTabMemoryCleanup(message, sender) {
   const cooldownRemaining = lastAt ? Math.max(0, MEMORY_DISCARD_COOLDOWN_MS - (now - lastAt)) : 0;
   const decision = validateMemoryRequest({ ...message, pluginId }, { record, tab, cooldownRemaining });
   if (!decision.ok || decision.reason !== "ready" || decision.canDiscard !== true) return decision;
-  try { await chrome.tabs.discard(tabId); }
-  catch { return { ok:false, discarded:false, reason:"discard-failed", tabId }; }
+  try {
+    // Navigate the existing tab to its current URL so the renderer and content
+    // script are rebuilt without creating, activating, or focusing another tab.
+    await chrome.tabs.update(tabId, { url: String(tab.url) });
+  } catch {
+    return { ok:false, discarded:false, reloaded:false, reason:"reload-failed", tabId };
+  }
   memoryDiscardedAt.set(key, now);
-  return { ok:true, discarded:true, reason:"discarded", tabId };
+  return { ok:true, discarded:false, reloaded:true, reason:"reloaded-same-tab", tabId };
 }
 
 if (typeof chrome !== "undefined" && chrome.runtime) {
