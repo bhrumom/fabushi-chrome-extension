@@ -1,3 +1,4 @@
+import { scanManagedTabs } from "./userscript-watchdog.js";
 const STORAGE_KEY = "fabushi.userscriptRecovery.v1";
 const RECOVERY_ALARM = "fabushi-userscript-recovery";
 const CAPABILITY = "tab-recovery";
@@ -200,82 +201,14 @@ async function releaseRecoveryCapability(message, sender) {
   return { released: true };
 }
 
-async function recoverRecord(record, tab, reason) {
-  const recoveryURL = safeRecoveryURL(record.recoveryURL);
-  if (!recoveryURL) return null;
-  const now = Date.now();
-  if (now - Number(record.lastRecoveryAt || 0) < RECOVERY_COOLDOWN_MS) return null;
-  let tabId = Number(record.tabId);
-  let action = "reload";
-  let reloadUsed = record.reloadUsed === true;
-  let takeoverUsed = record.takeoverUsed === true;
-  let reloadFailed = false;
-  if (!reloadUsed) {
-    try {
-      await chrome.tabs.update(tabId, { url: recoveryURL });
-      reloadUsed = true;
-    } catch {
-      reloadUsed = true;
-      reloadFailed = true;
-    }
-  }
-  if ((reloadFailed || record.reloadUsed === true) && !takeoverUsed) {
-    // The original tab already had its one recovery attempt and is still not
-    // usable, so take over exactly once in a fresh ChatGPT tab.
-    try {
-      const created = await chrome.tabs.create({ url: recoveryURL, active: true });
-      tabId = created.id;
-      action = "takeover";
-      takeoverUsed = true;
-    } catch {
-      return { ...record, status: "exhausted", reloadUsed, takeoverUsed, lastRecoveryReason: "recovery-tab-create-failed" };
-    }
-  } else if (reloadUsed && record.reloadUsed === true && takeoverUsed) {
-    return { ...record, status: "exhausted", reloadUsed, takeoverUsed, lastRecoveryReason: "recovery-budget-exhausted" };
-  }
-  return {
-    ...record,
-    tabId,
-    reloadUsed,
-    takeoverUsed,
-    lastRecoveryAt: now,
-    lastSeenAt: now,
-    expiresAt: now + LEASE_MS,
-    recoveryCount: Number(record.recoveryCount || 0) + 1,
-    status: "recovering",
-    lastRecoveryReason: String(reason || "stale-heartbeat").slice(0, 120),
-    lastRecoveryAction: action,
-    lastRecoveryURL: recoveryURL,
-    lastObservedURL: String(tab?.url || "").slice(0, 2000),
-  };
-}
-
 async function scanRecoveryRecords(trigger = "alarm") {
   if (scanPromise) return scanPromise;
   scanPromise = (async () => {
-    const records = await readRecords();
-    const now = Date.now();
-    let changed = false;
-    for (const [ownerTabId, record] of Object.entries(records)) {
-      if (!record || record.status === "released" || record.status === "exhausted" || Number(record.expiresAt || 0) <= now) {
-        delete records[ownerTabId];
-        changed = true;
-        continue;
-      }
-      let tab;
-      try { tab = await chrome.tabs.get(Number(record.tabId)); } catch { tab = null; }
-      const crash = !tab || tab.status === "unloaded" || isCrashURL(tab.url) || tab.discarded === true || isCrashTitle(tab.title);
-      const stale = now - Number(record.lastSeenAt || 0) >= HEARTBEAT_STALE_MS;
-      if (!crash && !stale) continue;
-      const recovered = await recoverRecord(record, tab, crash ? "crashed-tab" : `${trigger}:stale-heartbeat`).catch(() => null);
-      if (recovered) {
-        records[ownerTabId] = recovered;
-        changed = true;
-      }
-    }
-    if (changed) await writeRecords(records);
-    await syncKeepAwake(records, now);
-    return { changed, keepAwake: keepAwakeNeeded(records, now) };
+    // A dead renderer cannot refresh its lease. Keep saved recovery URLs for
+    // the watchdog; expiry releases keep-awake, not the task checkpoint.
+    const result = await scanManagedTabs(trigger);
+    await syncKeepAwake();
+    return result;
   })().finally(() => { scanPromise = null; });
   return scanPromise;
 }
@@ -286,6 +219,12 @@ async function ensureRecoveryAlarm() {
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (!message || typeof message !== "object") return false;
+  if (message.type === "fabushi.userscript.supervision.heartbeat") {
+    // Older installed content bridges send this heartbeat. Health is now
+    // checked independently in the background, so silence cannot expire it.
+    sendResponse({ ok: true, tracked: sender?.tab?.id != null ? 1 : 0 });
+    return false;
+  }
   if (message.type === "fabushi.userscript.recovery.request") {
     requestRecoveryCapability(message, sender)
       .then((result) => sendResponse({ ok: true, ...result }))
