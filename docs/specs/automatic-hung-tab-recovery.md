@@ -89,3 +89,6 @@ with a changed tab ID when kWebContentsDiscard is disabled.
 - Published repository code uses the canonical main runner; installed runner retains earlier local registration fallback/bridge/import changes outside this patch. The task-ticket wrapper and rescue/watchdog/diagnostic files are the same.
 
 Legacy .test.js check: marketplace-install passes; browser-extension and chrome-platform fail before assertions because local-install.js and desktop/electron/chrome-platform-server.cjs are absent from canonical HEAD. These migration leftovers are outside this patch; no legacy-suite pass is claimed.
+
+## 19. CI follow-up
+Exact-head run 37823767568 passed validate and artifact build/checksum verification. Packaged Chrome E2E cleanup raised ENOTEMPTY in its temporary profile and masked the primary test outcome. Repair fixture shutdown to await process exit after SIGKILL, retry temporary-directory cleanup, and report the primary failure before finally cleanup. Cleanup-only errors must not replace the primary error. No acceptance assertion is removed.
