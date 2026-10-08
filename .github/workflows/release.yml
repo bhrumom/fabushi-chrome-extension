@@ -39,7 +39,7 @@ jobs:
         run: node --test chatgpt-vps-control/tests/agent-protocol.test.mjs chatgpt-vps-control/tests/coordinator-transports.test.mjs chatgpt-vps-control/tests/remote-coordinator.test.mjs chatgpt-vps-control/tests/browser-runner.test.mjs chatgpt-vps-control/tests/grok-chrome-architecture.test.mjs chatgpt-vps-control/tests/agent-product.test.mjs
 
       - name: Test preserved Chrome capabilities
-        run: node --test chatgpt-vps-control/tests/preserved-capabilities.test.mjs chatgpt-vps-control/tests/host-resilience.test.mjs chatgpt-vps-control/tests/marketplace-install.test.js
+        run: node --test chatgpt-vps-control/tests/preserved-capabilities.test.mjs chatgpt-vps-control/tests/host-resilience.test.mjs chatgpt-vps-control/tests/marketplace-install.test.js chatgpt-vps-control/tests/tab-rescue.test.mjs chatgpt-vps-control/tests/task-recovery-adapter.test.mjs
 
       - name: Validate release tag
         if: startsWith(github.ref, 'refs/tags/')

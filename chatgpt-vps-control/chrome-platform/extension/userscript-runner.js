@@ -1,3 +1,4 @@
+import { canonicalTaskScript, taskRecoveryAdapter } from "./userscript-task-recovery.js";
 import { normalizeUserScript, publicUserScript, userScriptMatches } from "./userscript-core.js";
 import { MEMORY_DISCARD_COOLDOWN_MS, MEMORY_PLUGIN_ID, validateMemoryRequest } from "./userscript-memory-policy.js";
 
@@ -177,12 +178,13 @@ function sourceRevision(source) {
 }
 
 function executableSource(record) {
-  if (record.sourcePluginId !== BUNDLED_PLUGIN_ID) return record.source;
+  if (!canonicalTaskScript(record)) return record.source;
   const revision = sourceRevision(record.source);
   return `(() => {
+    const hostRecovery = (${taskRecoveryAdapter.toString()})({ prepare: true });
     const registry = window.__FABUSHI_USERSCRIPT_REVISIONS__ || (window.__FABUSHI_USERSCRIPT_REVISIONS__ = Object.create(null));
     const current = window.__FABUSHI_AUTO_CONFIRM_INSTANCE__;
-    if (registry[${JSON.stringify(record.id)}] === ${JSON.stringify(revision)} && current?.active) return;
+    if (registry[${JSON.stringify(record.id)}] === ${JSON.stringify(revision)} && current?.active && !hostRecovery.prepared) return;
     registry[${JSON.stringify(record.id)}] = ${JSON.stringify(revision)};
     current?.shutdown?.();
     ${record.source}
@@ -205,9 +207,9 @@ function registerUserScript(record) {
       // The canonical ChatGPT workbench must appear while its document is
       // loading. Its upstream @run-at is document-idle, which can defer the
       // panel until a slow ChatGPT renderer finally reaches load/idle.
-      runAt: record.sourcePluginId === BUNDLED_PLUGIN_ID ? "document_start" : record.runAt.replaceAll("-", "_"),
+      runAt: canonicalTaskScript(record) ? "document_start" : record.runAt.replaceAll("-", "_"),
       allFrames: record.noFrames !== true,
-      world: record.sourcePluginId === "chatgpt-auto-confirm" ? "MAIN" : "USER_SCRIPT",
+      world: canonicalTaskScript(record) ? "MAIN" : "USER_SCRIPT",
     };
     if (current.some((script) => script.id === record.id)) {
       await chrome.userScripts.update([definition]);
@@ -255,7 +257,7 @@ export async function runMatchingScripts(tabId, url, { requireSuccessfulMatches 
           await chrome.userScripts.execute({
             target: { tabId, allFrames: record.noFrames !== true },
             js: [{ code: executableSource(record) }],
-            world: record.sourcePluginId === "chatgpt-auto-confirm" ? "MAIN" : "USER_SCRIPT",
+            world: canonicalTaskScript(record) ? "MAIN" : "USER_SCRIPT",
           });
           return;
         }
