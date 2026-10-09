@@ -210,7 +210,11 @@ async function stopChrome() {
     new Promise((resolvePromise) => running.once("exit", resolvePromise)),
     sleep(3_000)
   ]);
-  if (running.exitCode == null && running.signalCode == null) running.kill("SIGKILL");
+  if (running.exitCode == null && running.signalCode == null) {
+    const exited = new Promise(resolve => running.once("exit", resolve));
+    running.kill("SIGKILL");
+    await Promise.race([exited, sleep(3_000)]);
+  }
   child = null;
   cdp = null;
 }
@@ -516,8 +520,16 @@ try {
   }
 
   console.log(JSON.stringify(evidence));
+} catch (error) {
+  // Report the actual acceptance failure before cleanup can throw.
+  console.error("Packaged Chrome acceptance failed:", error);
+  throw error;
 } finally {
   await stopChrome();
-  if (process.env.FABUSHI_KEEP_E2E_TEMP !== "1") await rm(temp, { recursive: true, force: true });
   if (stderr) process.stderr.write(stderr.slice(-12_000));
+  if (process.env.FABUSHI_KEEP_E2E_TEMP !== "1") {
+    await rm(temp, { recursive: true, force: true, maxRetries: 6, retryDelay: 250 }).catch(error => {
+      console.warn("Temporary Chrome profile cleanup failed:", error.message);
+    });
+  }
 }

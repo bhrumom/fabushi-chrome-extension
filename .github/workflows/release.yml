@@ -39,7 +39,29 @@ jobs:
         run: node --test chatgpt-vps-control/tests/agent-protocol.test.mjs chatgpt-vps-control/tests/coordinator-transports.test.mjs chatgpt-vps-control/tests/remote-coordinator.test.mjs chatgpt-vps-control/tests/browser-runner.test.mjs chatgpt-vps-control/tests/grok-chrome-architecture.test.mjs chatgpt-vps-control/tests/agent-product.test.mjs
 
       - name: Test preserved Chrome capabilities
-        run: node --test chatgpt-vps-control/tests/preserved-capabilities.test.mjs chatgpt-vps-control/tests/host-resilience.test.mjs chatgpt-vps-control/tests/marketplace-install.test.js
+        run: node --test chatgpt-vps-control/tests/preserved-capabilities.test.mjs chatgpt-vps-control/tests/host-resilience.test.mjs chatgpt-vps-control/tests/marketplace-install.test.js chatgpt-vps-control/tests/tab-rescue.test.mjs chatgpt-vps-control/tests/task-recovery-adapter.test.mjs
+
+      - name: Test background userscript scheduling and same-tab memory recovery
+        run: node --test chatgpt-vps-control/tests/userscript-background-wake.test.mjs
+
+      - name: Test memory recovery owner tickets
+        run: node --test chatgpt-vps-control/tests/memory-task-resume.test.mjs
+
+      - name: Check out pinned standalone task runner for recovery integration
+        uses: actions/checkout@v4
+        with:
+          repository: bhrumom/fabushi-chatgpt-auto-confirm-userscript
+          ref: 237f9852cffc955e2fa9aae1ba65a80db3b15233
+          path: .recovery-userscript
+          persist-credentials: false
+
+      - name: Install locked integration dependencies
+        run: npm ci --prefix .recovery-userscript --ignore-scripts
+
+      - name: Verify real task auto-start after session identity loss
+        env:
+          FABUSHI_RECOVERY_USERSCRIPT_DIR: ${{ github.workspace }}/.recovery-userscript
+        run: node --test chatgpt-vps-control/tests/automatic-task-bootstrap.integration.mjs
 
       - name: Validate release tag
         if: startsWith(github.ref, 'refs/tags/')
