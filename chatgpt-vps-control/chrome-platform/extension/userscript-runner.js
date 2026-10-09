@@ -368,13 +368,24 @@ async function requestTabMemoryCleanup(message, sender) {
   const now = Date.now();
   pruneMemoryDiscardCooldowns(now);
   const key = String(tabId) + ":" + String(record.id);
-  const lastAt = Number(memoryDiscardedAt.get(key) || 0);
+  const checkpointKey = `fabushi.userscript.memory-discard:${tabId}`;
+  // session storage survives MV3 worker suspension and document replacement.
+  const checkpoint = await chrome.storage.session.get(checkpointKey);
+  const lastAt = Math.max(Number(memoryDiscardedAt.get(key) || 0), Number(checkpoint[checkpointKey] || 0));
   const cooldownRemaining = lastAt ? Math.max(0, MEMORY_DISCARD_COOLDOWN_MS - (now - lastAt)) : 0;
   const decision = validateMemoryRequest({ ...message, pluginId }, { record, tab, cooldownRemaining });
   if (!decision.ok || decision.reason !== "ready" || decision.canDiscard !== true) return decision;
+  // Persist before destruction: if storage fails, retain the live page.
+  await chrome.storage.session.set({ [checkpointKey]:now });
   try { await chrome.tabs.discard(tabId); }
   catch { return { ok:false, discarded:false, reason:"discard-failed", tabId }; }
   memoryDiscardedAt.set(key, now);
+  if (decision.payload.resumeAfterDiscard) {
+    try {
+      await chrome.tabs.reload(tabId);
+      return { ok:true, discarded:true, reloaded:true, reason:"discarded-and-reloaded", tabId };
+    } catch { return { ok:false, discarded:true, reloaded:false, reason:"reload-failed", tabId }; }
+  }
   return { ok:true, discarded:true, reason:"discarded", tabId };
 }
 

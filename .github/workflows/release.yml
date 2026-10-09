@@ -41,6 +41,9 @@ jobs:
       - name: Test preserved Chrome capabilities
         run: node --test chatgpt-vps-control/tests/preserved-capabilities.test.mjs chatgpt-vps-control/tests/host-resilience.test.mjs chatgpt-vps-control/tests/marketplace-install.test.js
 
+      - name: Test background userscript scheduling and same-tab memory recovery
+        run: node --test chatgpt-vps-control/tests/userscript-background-wake.test.mjs
+
       - name: Validate release tag
         if: startsWith(github.ref, 'refs/tags/')
         shell: bash

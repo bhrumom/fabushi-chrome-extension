@@ -264,6 +264,13 @@ async function scanRecoveryRecords(trigger = "alarm") {
       }
       let tab;
       try { tab = await chrome.tabs.get(Number(record.tabId)); } catch { tab = null; }
+      // The memory owner already issued discard+reload against this exact tab.
+      // Do not race that operation with the legacy crash/takeover supervisor.
+      const memoryKey = `fabushi.userscript.memory-discard:${record.tabId}`;
+      const memoryCheckpoint = await chrome.storage.session.get(memoryKey);
+      if (Number(memoryCheckpoint[memoryKey] || 0) >= Number(record.lastSeenAt || 0)
+        && Number(memoryCheckpoint[memoryKey] || 0) > 0
+        && (tab?.discarded === true || tab?.status === "loading")) continue;
       const crash = !tab || tab.status === "unloaded" || isCrashURL(tab.url) || tab.discarded === true || isCrashTitle(tab.title);
       const stale = now - Number(record.lastSeenAt || 0) >= HEARTBEAT_STALE_MS;
       if (!crash && !stale) continue;
