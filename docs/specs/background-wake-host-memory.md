@@ -35,7 +35,9 @@ User request and screenshot 2026-10-09; AGENTS.md; continuous-task-no-memory-aut
 | R5 | passed | UI/README distinguish JS heap estimate and state frozen-renderer limitations. |
 | Regression | passed | Userscript 382 passed, 7 existing skips, 0 failures; extension CI test inventory plus new host tests 49 passed; 23 JavaScript syntax checks and parity ledger passed; git diff --check passed. |
 | Controlled browser fixture | blocked | Real host clock completed 40 waits with page timers withheld in about 13 seconds; two natural alarm pulses and one fixture approval were observed. Automation kept visibility visible (fixture override required), and the worker/page handle expired during reload verification. This is not prolonged hidden live-account acceptance. |
-| Installed acceptance | blocked | Requested Codex in-app browser provides no extension-install API; navigation to chrome://extensions was rejected by browser security policy. No installation or prolonged hidden real-account/real-pressure acceptance claimed. |
+| Installed acceptance | partial | User subsequently authorized native Chrome update. Existing unpacked extension was backed up and patched while preserving its newer same-tab recovery modules; Fabushi import UI confirms exactly one enabled canonical script at 2.10.39. Prolonged hidden real-account/real-pressure acceptance is still pending. |
 
 ## Extension ownership correction
 Owner: canonical Fabushi Chrome extension. Userscript changes are delivered in its separate canonical repository. Host base: 300134c. Host timer accepts only top-frame ChatGPT senders; alarm wakes only tabs matching an enabled canonical userscript. Reload failure returns an explicit reason; browser tabs are never created for memory recovery.
+
+Canonical local imports with the exact script name and namespace replace the managed record and retain its plugin identity. This prevents duplicate execution and keeps the host wake and memory bridge bound to the installed script. A regression verifies one record after import.

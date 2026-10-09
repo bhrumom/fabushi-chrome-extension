@@ -288,7 +288,7 @@ export async function installUserScript(message) {
   const existingRecords = await readRecords();
   const previous = existingRecords.find((item) => (message.sourcePluginId && item.sourcePluginId === message.sourcePluginId)
     || (!message.sourcePluginId && item.id === message.id));
-  const record = normalizeUserScript(message.source, {
+  let record = normalizeUserScript(message.source, {
     sourcePluginId: message.sourcePluginId,
     sourcePluginVersion: message.sourcePluginVersion,
     sourceRepository: message.sourceRepository,
@@ -301,6 +301,13 @@ export async function installUserScript(message) {
     installedAt: previous?.installedAt,
     enabled: message.enabled === undefined ? previous?.enabled !== false : message.enabled !== false,
   });
+  // Local imports of the canonical script must replace its managed record,
+  // otherwise the old copy and imported copy run simultaneously and host
+  // capabilities bind to the wrong sourcePluginId.
+  if (!record.sourcePluginId && record.name === "ChatGPT 自动确认 · Fabushi"
+    && record.namespace === "https://fabushi.ombhrum.com/userscripts/chatgpt-auto-confirm") {
+    record = normalizeUserScript(message.source, { ...record, sourcePluginId:BUNDLED_PLUGIN_ID });
+  }
   const records = existingRecords.filter((item) => item.id !== record.id
     && (!record.sourcePluginId || item.sourcePluginId !== record.sourcePluginId));
   records.push(record);

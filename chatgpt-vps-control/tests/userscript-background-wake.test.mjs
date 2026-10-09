@@ -3,6 +3,21 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import vm from 'node:vm';
 const root = new URL('../chrome-platform/extension/', import.meta.url);
+test('canonical local import replaces managed copy and retains host identity',async()=>{
+  const core=await readFile(new URL('userscript-core.js',root),'utf8');
+  const {normalizeUserScript,publicUserScript}=await import('data:text/javascript,'+encodeURIComponent(core));
+  const source='// ==UserScript==\n// @name ChatGPT 自动确认 · Fabushi\n// @namespace https://fabushi.ombhrum.com/userscripts/chatgpt-auto-confirm\n// @version 2.10.39\n// @match https://chatgpt.com/*\n// ==/UserScript==\n';
+  let records=[normalizeUserScript(source,{sourcePluginId:'chatgpt-auto-confirm'})];
+  const runner=await readFile(new URL('userscript-runner.js',root),'utf8');
+  const a=runner.indexOf('export async function installUserScript');
+  const b=runner.indexOf('async function callInstalledPlugin',a);
+  const context=vm.createContext({normalizeUserScript,publicUserScript,BUNDLED_PLUGIN_ID:'chatgpt-auto-confirm',BUNDLED_STATE_KEY:'bundled',readRecords:async()=>records,writeRecords:async r=>{records=r;},registerUserScript:async()=>{},chrome:{storage:{local:{set:async()=>{}}},tabs:{query:async()=>[]}}});
+  vm.runInContext(runner.slice(a,b).replace('export async','async')+'globalThis.install=installUserScript;',context);
+  await context.install({source});
+  assert.equal(records.length,1);
+  assert.equal(records[0].sourcePluginId,'chatgpt-auto-confirm');
+  assert.equal(records[0].version,'2.10.39');
+});
 async function backgroundFixture() {
   const calls=[]; const listeners={}; let enabled=true;
   const tabs=[{id:1,url:'https://chatgpt.com/c/background',active:false},{id:2,url:'https://chatgpt.com/c/front',active:true},{id:3,url:'https://chatgpt.com/c/discarded',discarded:true},{id:4,url:'https://example.org/',active:false}];
