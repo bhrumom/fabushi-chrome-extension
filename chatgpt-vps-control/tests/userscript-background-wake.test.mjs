@@ -61,8 +61,8 @@ test('same-tab memory recovery discards before reload and reports reload failure
   const b=runner.indexOf('if (typeof chrome',a);
   const policySource=await readFile(new URL('userscript-memory-policy.js',root),'utf8');
   const {validateMemoryRequest,MEMORY_DISCARD_COOLDOWN_MS}=await import('data:text/javascript,'+encodeURIComponent(policySource));
-  const calls=[]; let active=false;let failReload=false;
-  const context=vm.createContext({validateMemoryRequest,MEMORY_DISCARD_COOLDOWN_MS,MEMORY_PLUGIN_ID:'chatgpt-auto-confirm',memoryDiscardedAt:new Map(),readRecords:async()=>[{id:'test',sourcePluginId:'chatgpt-auto-confirm',enabled:true}],chrome:{storage:{session:{get:async()=>({}),set:async()=>{}}},tabs:{get:async id=>({id,url:'https://chatgpt.com/c/test',active}),discard:async id=>{calls.push(['discard',id]);},reload:async id=>{calls.push(['reload',id]);if(failReload)throw Error('reload');}}}});
+  const calls=[]; let active=false;let failReload=false;let replacement=null;let storedLeases;let failMigration=false;
+  const context=vm.createContext({console:{warn:()=>{}},validateMemoryRequest,MEMORY_DISCARD_COOLDOWN_MS,MEMORY_PLUGIN_ID:'chatgpt-auto-confirm',memoryDiscardedAt:new Map(),readRecords:async()=>[{id:'test',sourcePluginId:'chatgpt-auto-confirm',enabled:true}],chrome:{storage:{session:{get:async()=>({}),set:async()=>{}},local:{get:async()=>{if(failMigration)throw Error('storage');return {'fabushi.userscriptRecovery.v1':{owner:{tabId:9}}};},set:async value=>{storedLeases=value;}}},tabs:{get:async id=>({id,url:'https://chatgpt.com/c/test',active}),discard:async id=>{calls.push(['discard',id]);return replacement ? {id:replacement} : undefined;},reload:async id=>{calls.push(['reload',id]);if(failReload)throw Error('reload');}}}});
   vm.runInContext(runner.slice(a,b)+'globalThis.request = requestTabMemoryCleanup;',context);
   const message={pluginId:'chatgpt-auto-confirm',scriptId:'test',payload:{capability:'tab-memory-discard-resume',pressure:'high',usedBytes:2*1024**3,safeToDiscard:true,resumeAfterDiscard:true}};
   const result=await context.request(message,{tab:{id:7}});
@@ -75,6 +75,16 @@ test('same-tab memory recovery discards before reload and reports reload failure
   const failure=await context.request(message,{tab:{id:8}});
   assert.equal(failure.reason,'reload-failed');
   assert.equal(failure.discarded,true);
+  failReload=false;replacement=99;
+  const replaced=await context.request(message,{tab:{id:9}});
+  assert.equal(replaced.tabId,99);
+  assert.equal(replaced.originalTabId,9);
+  assert.deepEqual(calls.slice(-2),[['discard',9],['reload',99]]);
+  assert.equal(storedLeases['fabushi.userscriptRecovery.v1'].owner.tabId,99);
+  assert.equal((await context.request(message,{tab:{id:99}})).reason,'cooldown');
+  failMigration=true;replacement=100;
+  assert.equal((await context.request(message,{tab:{id:10}})).reloaded,true);
+  assert.deepEqual(calls.slice(-2),[['discard',10],['reload',100]]);
 });
 test('legacy recovery cannot race a host memory discard into a replacement tab',async()=>{
   const recovery=await readFile(new URL('userscript-recovery.js',root),'utf8');

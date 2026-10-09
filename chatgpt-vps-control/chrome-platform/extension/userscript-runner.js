@@ -384,14 +384,31 @@ async function requestTabMemoryCleanup(message, sender) {
   if (!decision.ok || decision.reason !== "ready" || decision.canDiscard !== true) return decision;
   // Persist before destruction: if storage fails, retain the live page.
   await chrome.storage.session.set({ [checkpointKey]:now });
-  try { await chrome.tabs.discard(tabId); }
+  let discardedTab;
+  try { discardedTab = await chrome.tabs.discard(tabId); }
   catch { return { ok:false, discarded:false, reason:"discard-failed", tabId }; }
   memoryDiscardedAt.set(key, now);
+  // Chromium can replace WebContents and its extension ID while retaining
+  // the same tab-strip slot. The discard result is the authoritative tab.
+  const resumeTabId = Number.isInteger(discardedTab?.id) ? discardedTab.id : tabId;
+  if (resumeTabId !== tabId) {
+    try {
+    await chrome.storage.session.set({ [`fabushi.userscript.memory-discard:${resumeTabId}`]:now });
+    memoryDiscardedAt.set(String(resumeTabId) + ":" + String(record.id), now);
+    const leaseKey = "fabushi.userscriptRecovery.v1";
+    const leases = (await chrome.storage.local.get(leaseKey))[leaseKey] || {};
+    for (const lease of Object.values(leases)) if (lease?.tabId === tabId) lease.tabId = resumeTabId;
+    await chrome.storage.local.set({ [leaseKey]:leases });
+    } catch (error) {
+      // Destruction already happened: resume the page even if migration fails.
+      console.warn('[Fabushi] 内存恢复记录迁移失败，仍将重载原标签页', error);
+    }
+  }
   if (decision.payload.resumeAfterDiscard) {
     try {
-      await chrome.tabs.reload(tabId);
-      return { ok:true, discarded:true, reloaded:true, reason:"discarded-and-reloaded", tabId };
-    } catch { return { ok:false, discarded:true, reloaded:false, reason:"reload-failed", tabId }; }
+      await chrome.tabs.reload(resumeTabId);
+      return { ok:true, discarded:true, reloaded:true, reason:"discarded-and-reloaded", tabId:resumeTabId, originalTabId:tabId };
+    } catch { return { ok:false, discarded:true, reloaded:false, reason:"reload-failed", tabId:resumeTabId, originalTabId:tabId }; }
   }
   return { ok:true, discarded:true, reason:"discarded", tabId };
 }
