@@ -104,3 +104,10 @@ test('content reinjection keeps one scoped wake listener and forwards the host p
  vm.runInContext(source,context);vm.runInContext(source,context);assert.equal(listeners.length,1);
  assert.doesNotThrow(()=>listeners[0]({type:'fabushi.userscript.wake'}));assert.equal(posts.at(-1).source,'fabushi-extension');assert.equal(posts.at(-1).type,'background-wake');
 });
+
+test('alarm repairs a missing content bridge in the original hidden tab',async()=>{
+ const f=await backgroundFixture();let attempts=0;const injected=[];
+ f.context.chrome.tabs.sendMessage=async()=>{if(++attempts===1)throw new Error('Receiving end does not exist');};
+ f.context.chrome.scripting={executeScript:async args=>injected.push(args)};
+ await f.context.wake();assert.equal(attempts,2);assert.equal(injected.length,1);assert.equal(injected[0].target.tabId,1);assert.equal(injected[0].target.allFrames,false);assert.equal(injected[0].files[0],'userscript-content.js');
+});

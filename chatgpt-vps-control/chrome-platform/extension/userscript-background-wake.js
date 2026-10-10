@@ -13,7 +13,17 @@ export async function wakeBackgroundTabs() {
     if (!records.length) return;
     const tabs = await chrome.tabs.query({ url:["https://chatgpt.com/*", "https://chat.openai.com/*"] });
     await Promise.allSettled(tabs.filter(tab => !tab.active && !tab.discarded && CHATGPT.test(tab.url || "") && records.some(record => userScriptMatches(record, tab.url)))
-      .map(tab => chrome.tabs.sendMessage(tab.id, { type:"fabushi.userscript.wake" }, { frameId:0 })));
+      .map(async tab => {
+        const message = { type:"fabushi.userscript.wake" };
+        try { await chrome.tabs.sendMessage(tab.id, message, { frameId:0 }); }
+        catch {
+          // Extension reload does not run manifest content scripts in existing
+          // documents. Repair that bridge in place, then deliver this pulse.
+          if (!chrome.scripting?.executeScript) return;
+          await chrome.scripting.executeScript({ target:{tabId:tab.id,allFrames:false}, files:["userscript-content.js"] });
+          await chrome.tabs.sendMessage(tab.id, message, { frameId:0 });
+        }
+      }));
   } finally { waking = false; }
 }
 chrome.runtime.onMessage.addListener((message, sender, respond) => {

@@ -1,5 +1,5 @@
-if (!globalThis.__FABUSHI_USERSCRIPT_CONTENT_LOADED__) {
-globalThis.__FABUSHI_USERSCRIPT_CONTENT_LOADED__ = true;
+if (globalThis.__FABUSHI_USERSCRIPT_CONTENT_LOADED__ !== 2) {
+globalThis.__FABUSHI_USERSCRIPT_CONTENT_LOADED__ = 2;
 const REQUEST_SOURCE = "fabushi-userscript";
 const RESPONSE_SOURCE = "fabushi-extension";
 const NAVIGATION_PLUGIN_ID = "chatgpt-auto-confirm";
