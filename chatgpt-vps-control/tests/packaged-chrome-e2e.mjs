@@ -317,10 +317,14 @@ async function openApp(extensionId) {
   const sessionId = attached.sessionId;
   await cdp.send("Runtime.enable", {}, sessionId);
   await cdp.send("Page.enable", {}, sessionId);
-  await waitFor(
-    async () => (await evaluate(sessionId, "document.readyState")).value === "complete",
-    "app page load"
-  );
+  // The initial document can already be complete before the extension navigation
+  // commits. Wait for the intended URL and its loaded title in the same snapshot.
+  await waitFor(async () => {
+    const page = (await evaluate(sessionId, `({
+      ready: document.readyState, href: location.href, title: document.title
+    })`)).value || {};
+    return page.ready === "complete" && page.href === url && page.title === "Fabushi";
+  }, "Fabushi app navigation and document load");
   const identity = (await evaluate(sessionId, `({
     runtimeId: globalThis.chrome?.runtime?.id || "",
     title: document.title,
