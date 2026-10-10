@@ -111,3 +111,14 @@ test('alarm repairs a missing content bridge in the original hidden tab',async()
  f.context.chrome.scripting={executeScript:async args=>injected.push(args)};
  await f.context.wake();assert.equal(attempts,2);assert.equal(injected.length,1);assert.equal(injected[0].target.tabId,1);assert.equal(injected[0].target.allFrames,false);assert.equal(injected[0].files[0],'userscript-content.js');
 });
+
+test('project conversation sender receives a normal root dispatch lease without widening targets',async()=>{
+ const source=await readFile(new URL('userscript-navigation-guard.js',root),'utf8');let handler;let stored={};let url='https://chatgpt.com/g/g-p-123456-fabushi/c/conversation';
+ const context=vm.createContext({URL,Date,crypto:{randomUUID:()=>Math.random().toString()},chrome:{storage:{session:{get:async()=>stored,set:async v=>{stored=v;}}},runtime:{onMessage:{addListener:fn=>handler=fn}},tabs:{get:async()=>({id:7,url,status:'complete'}),onUpdated:{addListener:()=>{}},onRemoved:{addListener:()=>{}}}}});
+ vm.runInContext(source,context);
+ const message={type:'fabushi.userscript.navigation.request',pluginId:'chatgpt-auto-confirm',payload:{capability:'tab-navigation-guard',ownerTabId:'owner',taskId:'task',targetURL:'https://chatgpt.com/',phase:'work',round:1}};
+ const request=()=>new Promise(resolve=>handler(message,{tab:{id:7,url}},resolve));
+ const granted=await request();assert.equal(granted.granted,true);assert.match(granted.leaseId,/fabushi-navigation-lease/);
+ for(const bad of ['https://example.org/g/g-p-123/c/test','https://chatgpt.com/g/other/c/test','https://chatgpt.com/g/g-p-123/project']){url=bad;const r=await request();assert.equal(r.granted,false);assert.equal(r.reason,'invalid-request');}
+ url='https://chatgpt.com/g/g-p-123/c/test';message.payload.targetURL='https://chatgpt.com/g/g-p-123/project';const r=await request();assert.equal(r.granted,false);assert.equal(r.reason,'invalid-request');
+});
