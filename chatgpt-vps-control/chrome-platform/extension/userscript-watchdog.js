@@ -11,6 +11,15 @@ const BUDGET_MS = 10 * 60_000;
 let scanPromise;
 const repairs = new Set();
 
+function scriptResponsive(tab, leases, timestamp) {
+  return Object.values(leases || {}).some(record => record?.tabId === tab.id
+    && record.running === true && record.status === "granted"
+    && Number(record.expiresAt || 0) > timestamp
+    && timestamp - Number(record.lastSeenAt || 0) >= 0
+    && timestamp - Number(record.lastSeenAt || 0) <= UNHEALTHY_MS
+    && samePage(record.sourceURL, tab.url));
+}
+
 export async function repairUnclaimedTask(tabId, expectedURL) {
   if (!Number.isInteger(tabId) || !webURL(expectedURL) || repairs.has(tabId)) throw Error("invalid-repair-target");
   repairs.add(tabId);
@@ -91,6 +100,9 @@ export function scanManagedTabs(trigger = "alarm", { now = Date.now, probe = pro
       }
       if (tab.discarded || tab.frozen || (tab.pendingUrl && !samePage(tab.url, tab.pendingUrl))) return { tab, deferred: true };
       const canonical = scripts.some(script => canonicalTaskScript(script) && userScriptMatches(script, tab.url));
+      if (canonical && scriptResponsive(tab, data["fabushi.userscriptRecovery.v1"], now())) {
+        return { tab, deferred:true, deferReason:"task-script-responsive" };
+      }
       const [health, checkpoint] = await Promise.all([probe(tab.id), canonical ? probeTaskRecovery(tab.id) : null]);
       return { tab, health, checkpoint };
     }));
@@ -128,6 +140,14 @@ export function scanManagedTabs(trigger = "alarm", { now = Date.now, probe = pro
         record.recoveryCount = 0;
       }
       if (record.recoveryCount >= 2) { record.status = "exhausted"; continue; }
+      const freshLeases = (await chrome.storage.local.get("fabushi.userscriptRecovery.v1"))["fabushi.userscriptRecovery.v1"];
+      if (scripts.some(script => canonicalTaskScript(script) && userScriptMatches(script, tab.url))
+        && scriptResponsive(tab, freshLeases, now())) {
+        record.unhealthySince = 0;
+        record.status = "deferred";
+        record.lastHealthReason = "task-script-responsive";
+        continue;
+      }
       const current = await chrome.tabs.get(tab.id).catch(() => null);
       if (!current || current.status === "loading" || current.discarded || current.frozen || !samePage(current.url, tab.url)
         || (current.pendingUrl && !samePage(current.pendingUrl, tab.url))) continue;

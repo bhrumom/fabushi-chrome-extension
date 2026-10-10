@@ -32,6 +32,33 @@ function reset() {
   local["fabushi.userscripts.v1"] = [{ id: "auto-confirm", enabled: true, matches: ["https://chatgpt.com/*"] }];
 }
 const failed = async () => ({ healthy: false, reason: "probe-timeout" });
+test("responsive task script owns recovery until its exact-route heartbeat becomes stale", async () => {
+  reset(); let time = Date.now();
+  local["fabushi.userscripts.v1"][0].sourcePluginId = "chatgpt-auto-confirm";
+  local["fabushi.userscriptRecovery.v1"] = { owner: { tabId:10, sourceURL:url,
+    running:true, status:"granted", lastSeenAt:time, expiresAt:time+600000 } };
+  await scanManagedTabs("responsive", { now:()=>time, probe:failed });
+  time += 90000;
+  await scanManagedTabs("responsive", { now:()=>time, probe:failed });
+  assert.equal(events.length,0);
+  assert.equal(session[WATCHDOG_KEY][10].lastHealthReason,"task-script-responsive");
+  time++;
+  await scanManagedTabs("stale", { now:()=>time, probe:failed });
+  time+=90000;
+  await scanManagedTabs("hung", { now:()=>time, probe:failed });
+  assert.equal(events.filter(event=>event[0]==="Runtime.terminateExecution").length,1);
+});
+test("a heartbeat renewed during a failed probe cancels host recovery",async()=>{
+  reset(); let time=Date.now();
+  local["fabushi.userscripts.v1"][0].sourcePluginId="chatgpt-auto-confirm";
+  await scanManagedTabs("start",{now:()=>time,probe:failed}); time+=90000;
+  await scanManagedTabs("renewed",{now:()=>time,probe:async()=>{
+    local["fabushi.userscriptRecovery.v1"]={owner:{tabId:10,sourceURL:url,running:true,status:"granted",lastSeenAt:time,expiresAt:time+300000}};
+    return failed();
+  }});
+  assert.equal(events.length,0);
+  assert.equal(session[WATCHDOG_KEY][10].unhealthySince,0);
+});
 
 test("inactive hung tab crosses origin without discard, preserving numeric identity and checkpoint", async () => {
   reset();
