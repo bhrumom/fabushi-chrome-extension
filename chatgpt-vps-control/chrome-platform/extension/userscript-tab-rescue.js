@@ -1,4 +1,5 @@
 export const RESCUE_KEY = "fabushi.tabRescue.v1";
+export const RESTORE_SETTLE_MS = 120_000;
 const operations = new Map();
 let storageQueue = Promise.resolve();
 function changePending(operation) {
@@ -75,6 +76,22 @@ export async function restoreRescue(tabId) {
     await changePending(current => { if (current[tabId]?.transitURL === record.transitURL) delete current[tabId]; });
     return false;
   }
+  // A worker can stop after navigation commits but before pending cleanup.
+  // This is completion of restoration, not another prepared hung-page rescue.
+  if (record.stage === "restoring" && samePage(tab.url, record.recoveryURL) && !tab.discarded) {
+    await changePending(current => { if (current[tabId]?.transitURL === record.transitURL) delete current[tabId]; });
+    return true;
+  }
+  if (tab.discarded || tab.url === record.transitURL) {
+    // Persist before navigation: the alarm and a restarted worker must agree
+    // that the destination is allowed time to hydrate, even without a heartbeat.
+    await changePending(current => { if (current[tabId]?.transitURL === record.transitURL) current[tabId].stage = "restoring"; });
+    const key = "fabushi.scriptTabWatchdog.v1";
+    const observed = (await chrome.storage.session.get(key))[key] || {};
+    observed[tabId] = { ...observed[tabId], tabId, url: record.recoveryURL,
+      settleUntil: Date.now() + RESTORE_SETTLE_MS, unhealthySince: 0, status: "restoring-loading" };
+    await chrome.storage.session.set({ [key]: observed });
+  }
   // A discard path retains the original URL; transit gets a full navigation.
   if (tab.discarded) {
     if (tab.url !== record.recoveryURL) await chrome.tabs.update(tabId, { url: record.recoveryURL });
@@ -96,14 +113,14 @@ export function rescueSameTab(tabId, sourceURL, recoveryURL) {
   const operation = (async () => {
     if (!webURL(sourceURL) || !webURL(recoveryURL) || !samePage(sourceURL, recoveryURL)) throw Error("invalid-recovery-target");
     let tab = await chrome.tabs.get(tabId);
-    if (!samePage(tab.url, sourceURL) || (tab.pendingUrl && !samePage(tab.pendingUrl, sourceURL))) throw Error("tab-navigated");
+    if (tab.status === "loading" || !samePage(tab.url, sourceURL) || (tab.pendingUrl && !samePage(tab.pendingUrl, sourceURL))) throw Error("tab-loading-or-navigated");
     const transitURL = chrome.runtime.getURL("tab-rescue.html") + "#" + crypto.randomUUID();
     await changePending(records => { records[tabId] = { sourceURL, recoveryURL, transitURL, stage: "prepared", startedAt: Date.now() }; });
     // Chrome can replace the extension tab ID on discard. Use the same
     // browser-initiated navigation for inactive tabs to retain numeric identity.
     await terminateHungExecution(tabId);
     tab = await chrome.tabs.get(tabId);
-    if (!samePage(tab.url, sourceURL) || (tab.pendingUrl && !samePage(tab.pendingUrl, sourceURL))) throw Error("tab-navigated");
+    if (tab.status === "loading" || !samePage(tab.url, sourceURL) || (tab.pendingUrl && !samePage(tab.pendingUrl, sourceURL))) throw Error("tab-loading-or-navigated");
     // Cross-origin navigation is initiated in the browser, not by executing
     // location.replace inside the hung renderer. No tabs.create or activation.
     await chrome.tabs.update(tabId, { url: transitURL });

@@ -54,7 +54,7 @@ test("active hung tab terminates execution and crosses extension origin without 
 });
 test("user navigation after a failed-page observation is never overwritten", async () => {
   reset(); tabs[0].url = "https://example.com/";
-  await assert.rejects(rescueSameTab(10, url, url), /tab-navigated/);
+  await assert.rejects(rescueSameTab(10, url, url), /navigated/);
   assert.equal(events.length, 0);
 });
 test("bootstrap discovers already-hung page without heartbeat and keeps an expired lease checkpoint", async () => {
@@ -90,7 +90,7 @@ test("sleep gap resets continuous failure evidence; disabled scripts and closed 
   assert.deepEqual(session[WATCHDOG_KEY], {});
 });
 test("crash loop budget survives healthy document and stops after two attempts", async () => {
-  reset(); let time = 1_000_000;
+  reset(); let time = Date.now();
   for (let index = 0; index < 3; index++) {
     await scanManagedTabs("alarm", { now: () => time, probe: failed }); time += 90_000;
     await scanManagedTabs("alarm", { now: () => time, probe: failed });
@@ -100,6 +100,51 @@ test("crash loop budget survives healthy document and stops after two attempts",
   }
   assert.equal(events.filter(event => event[0] === "Runtime.terminateExecution").length, 2);
   assert.equal(session[WATCHDOG_KEY][10].recoveryCount, 2);
+});
+test("restored slow page waits through loading and settling before fresh failure evidence", async () => {
+  reset();
+  await rescueSameTab(10, url, url);
+  await restoreRescue(10);
+  const deadline = session[WATCHDOG_KEY][10].settleUntil;
+  assert.ok(deadline > Date.now());
+  events.length = 0;
+  let time = deadline - 1_000, probes = 0;
+  const probe = async () => { probes++; return failed(); };
+  await scanManagedTabs("worker-restart", { now: () => time, probe });
+  assert.equal(probes, 0);
+  tabs[0].status = "loading";
+  time = deadline + 600_000;
+  await scanManagedTabs("slow-network", { now: () => time, probe });
+  assert.equal(probes, 0);
+  assert.equal(events.length, 0);
+  assert.equal(session[WATCHDOG_KEY][10].unhealthySince, 0);
+  tabs[0].status = "complete";
+  await scanManagedTabs("loaded", { now: () => time, probe });
+  time += 89_999;
+  await scanManagedTabs("alarm", { now: () => time, probe });
+  assert.equal(events.length, 0);
+  time += 1;
+  await scanManagedTabs("alarm", { now: () => time, probe });
+  assert.equal(events.filter(event => event[0] === "Runtime.terminateExecution").length, 1);
+});
+test("loading at destructive recheck does not terminate the newly loading page", async () => {
+  reset(); let time = Date.now();
+  await scanManagedTabs("start", { now: () => time, probe: failed });
+  time += 90_000;
+  await scanManagedTabs("race", { now: () => time, probe: async () => {
+    tabs[0].status = "loading";
+    return failed();
+  } });
+  assert.equal(events.length, 0);
+});
+test("worker restart at restored destination consumes pending restoration without replay", async () => {
+  reset();
+  session[RESCUE_KEY] = { 10: { sourceURL: url, recoveryURL: url,
+    transitURL: "chrome-extension://fabushi/tab-rescue.html#old", stage: "restoring" } };
+  tabs[0].status = "loading";
+  assert.equal(await restoreRescue(10), true);
+  assert.equal(events.length, 0);
+  assert.deepEqual(session[RESCUE_KEY], {});
 });
 test("an unresponsive probe returns within its deadline rather than blocking scan", async () => {
   reset(); const original = chrome.scripting.executeScript;

@@ -85,12 +85,16 @@ export function scanManagedTabs(trigger = "alarm", { now = Date.now, probe = pro
     const alive = new Set(candidates.map(tab => String(tab.id)));
     for (const key of Object.keys(records)) if (!alive.has(key)) delete records[key];
     const observations = await Promise.all(candidates.map(async tab => {
+      const observation = records[tab.id];
+      if (tab.status === "loading" || (samePage(observation?.url, tab.url) && Number(observation?.settleUntil || 0) > now())) {
+        return { tab, deferred: true, deferReason: "restored-or-loading-document" };
+      }
       if (tab.discarded || tab.frozen || (tab.pendingUrl && !samePage(tab.url, tab.pendingUrl))) return { tab, deferred: true };
       const canonical = scripts.some(script => canonicalTaskScript(script) && userScriptMatches(script, tab.url));
       const [health, checkpoint] = await Promise.all([probe(tab.id), canonical ? probeTaskRecovery(tab.id) : null]);
       return { tab, health, checkpoint };
     }));
-    for (const { tab, health, checkpoint, deferred } of observations) {
+    for (const { tab, health, checkpoint, deferred, deferReason } of observations) {
       const timestamp = now();
       const previous = records[tab.id];
       const record = previous && samePage(previous.url, tab.url) ? previous
@@ -99,7 +103,8 @@ export function scanManagedTabs(trigger = "alarm", { now = Date.now, probe = pro
       record.url = tab.url;
       if (deferred) {
         record.unhealthySince = 0;
-        record.lastHealthReason = "browser-suspended-or-navigating";
+        record.lastHealthReason = deferReason || "browser-suspended-or-navigating";
+        record.status = "deferred";
         continue;
       }
       // Sleep/eviction is not continuous evidence of unresponsiveness.
@@ -124,7 +129,7 @@ export function scanManagedTabs(trigger = "alarm", { now = Date.now, probe = pro
       }
       if (record.recoveryCount >= 2) { record.status = "exhausted"; continue; }
       const current = await chrome.tabs.get(tab.id).catch(() => null);
-      if (!current || current.discarded || current.frozen || !samePage(current.url, tab.url)
+      if (!current || current.status === "loading" || current.discarded || current.frozen || !samePage(current.url, tab.url)
         || (current.pendingUrl && !samePage(current.pendingUrl, tab.url))) continue;
       // Recheck draft/navigation immediately before the destructive unload.
       const finalHealth = await probe(tab.id);
