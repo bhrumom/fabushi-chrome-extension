@@ -97,3 +97,10 @@ test('legacy recovery cannot race a host memory discard into a replacement tab',
   await context.scan();
   assert.equal(recovered,0);assert.equal(delegated,1,'legacy lease monitor delegates to the single watchdog');
 });
+test('content reinjection keeps one scoped wake listener and forwards the host pulse',async()=>{
+ const source=await readFile(new URL('userscript-content.js',root),'utf8');const listeners=[],posts=[];
+ const window={addEventListener:()=>{},setInterval:()=>{},postMessage:m=>posts.push(m)};
+ const context=vm.createContext({window,location:{href:'https://chatgpt.com/c/test'},console,chrome:{runtime:{onMessage:{addListener:fn=>listeners.push(fn)},sendMessage:()=>Promise.resolve({ok:true})}}});
+ vm.runInContext(source,context);vm.runInContext(source,context);assert.equal(listeners.length,1);
+ assert.doesNotThrow(()=>listeners[0]({type:'fabushi.userscript.wake'}));assert.equal(posts.at(-1).source,'fabushi-extension');assert.equal(posts.at(-1).type,'background-wake');
+});

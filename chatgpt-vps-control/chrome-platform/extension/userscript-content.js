@@ -1,3 +1,5 @@
+if (!globalThis.__FABUSHI_USERSCRIPT_CONTENT_LOADED__) {
+globalThis.__FABUSHI_USERSCRIPT_CONTENT_LOADED__ = true;
 const REQUEST_SOURCE = "fabushi-userscript";
 const RESPONSE_SOURCE = "fabushi-extension";
 const NAVIGATION_PLUGIN_ID = "chatgpt-auto-confirm";
@@ -248,3 +250,5 @@ chrome.runtime.onMessage?.addListener(message => {
   window.postMessage({ source:RESPONSE_SOURCE, type:"background-wake" }, "*");
   return false;
 });
+
+}
