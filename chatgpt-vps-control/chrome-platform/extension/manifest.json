@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "Fabushi",
   "short_name": "Fabushi",
-  "version": "0.7.0",
+  "version": "0.7.1",
   "minimum_chrome_version": "120",
   "description": "Fabushi for Chrome — Grok-shaped Agent workspace plus secure Browser Control, Mini Apps, Marketplace, userscripts, and optional native/remote runtime transport.",
   "permissions": [
