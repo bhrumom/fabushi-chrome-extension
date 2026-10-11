@@ -210,7 +210,11 @@ async function stopChrome() {
     new Promise((resolvePromise) => running.once("exit", resolvePromise)),
     sleep(3_000)
   ]);
-  if (running.exitCode == null && running.signalCode == null) running.kill("SIGKILL");
+  if (running.exitCode == null && running.signalCode == null) {
+    const exited = new Promise(resolve => running.once("exit", resolve));
+    running.kill("SIGKILL");
+    await Promise.race([exited, sleep(3_000)]);
+  }
   child = null;
   cdp = null;
 }
@@ -313,10 +317,14 @@ async function openApp(extensionId) {
   const sessionId = attached.sessionId;
   await cdp.send("Runtime.enable", {}, sessionId);
   await cdp.send("Page.enable", {}, sessionId);
-  await waitFor(
-    async () => (await evaluate(sessionId, "document.readyState")).value === "complete",
-    "app page load"
-  );
+  // The initial document can already be complete before the extension navigation
+  // commits. Wait for the intended URL and its loaded title in the same snapshot.
+  await waitFor(async () => {
+    const page = (await evaluate(sessionId, `({
+      ready: document.readyState, href: location.href, title: document.title
+    })`)).value || {};
+    return page.ready === "complete" && page.href === url && page.title === "Fabushi";
+  }, "Fabushi app navigation and document load");
   const identity = (await evaluate(sessionId, `({
     runtimeId: globalThis.chrome?.runtime?.id || "",
     title: document.title,
@@ -516,8 +524,16 @@ try {
   }
 
   console.log(JSON.stringify(evidence));
+} catch (error) {
+  // Report the actual acceptance failure before cleanup can throw.
+  console.error("Packaged Chrome acceptance failed:", error);
+  throw error;
 } finally {
   await stopChrome();
-  if (process.env.FABUSHI_KEEP_E2E_TEMP !== "1") await rm(temp, { recursive: true, force: true });
   if (stderr) process.stderr.write(stderr.slice(-12_000));
+  if (process.env.FABUSHI_KEEP_E2E_TEMP !== "1") {
+    await rm(temp, { recursive: true, force: true, maxRetries: 6, retryDelay: 250 }).catch(error => {
+      console.warn("Temporary Chrome profile cleanup failed:", error.message);
+    });
+  }
 }

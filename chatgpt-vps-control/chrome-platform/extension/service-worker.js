@@ -8,3 +8,5 @@ import "./userscript-navigation-guard.js";
 import "./userscript-runner.js";
 import "./marketplace-update-check.js";
 import "./agent-broker.js";
+
+import "./userscript-background-wake.js";

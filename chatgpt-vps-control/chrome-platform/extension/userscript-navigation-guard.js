@@ -51,11 +51,12 @@ function safeText(value, max = 240) {
   return text && !/[\u0000-\u001f\u007f]/.test(text) ? text : "";
 }
 
-function chatGPTURL(value, { allowRecoveryHash = false } = {}) {
+function chatGPTURL(value, { allowRecoveryHash = false, allowProjectSource = false } = {}) {
   try {
     const target = new URL(String(value || ""));
     if (target.protocol !== "https:" || !CHATGPT_HOSTS.has(target.hostname.toLowerCase())) return "";
-    if (!PATH_PATTERN.test(target.pathname) || target.search) return "";
+    const projectSource = allowProjectSource && /^\/g\/g-p-[a-zA-Z0-9-]+\/c\/[^/?#]+$/.test(target.pathname);
+    if ((!PATH_PATTERN.test(target.pathname) && !projectSource) || target.search) return "";
     if (target.hash && (!allowRecoveryHash || !/^#fabushi-resume=[^&]+$/.test(target.hash))) return "";
     return target.href;
   } catch {
@@ -74,7 +75,7 @@ function isCrashTab(tab) {
 function senderTab(sender) {
   const tabId = sender?.tab?.id;
   if (!Number.isInteger(tabId) || tabId < 0) throw new Error("导航保护请求没有关联有效标签页。");
-  const senderURL = chatGPTURL(sender?.tab?.url || sender?.tab?.pendingUrl);
+  const senderURL = chatGPTURL(sender?.tab?.url || sender?.tab?.pendingUrl, { allowProjectSource:true });
   if (!senderURL) throw new Error("导航保护只允许由 ChatGPT 页面请求。");
   return { tabId, senderURL };
 }

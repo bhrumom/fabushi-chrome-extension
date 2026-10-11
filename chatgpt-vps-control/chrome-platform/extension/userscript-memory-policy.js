@@ -1,4 +1,5 @@
 export const MEMORY_CAPABILITY = "tab-memory-discard";
+export const MEMORY_RESUME_CAPABILITY = "tab-memory-discard-resume";
 export const MEMORY_PLUGIN_ID = "chatgpt-auto-confirm";
 export const MEMORY_DISCARD_COOLDOWN_MS = 5 * 60 * 1000;
 
@@ -28,6 +29,7 @@ export function normalizeMemoryPayload(value) {
     hasDraft: payload.hasDraft === true,
     hasPendingAttachment: payload.hasPendingAttachment === true,
     userInitiated: payload.userInitiated === true,
+    resumeAfterDiscard: payload.resumeAfterDiscard === true,
     reason: String(payload.reason || "").trim().slice(0, 80),
   };
 }
@@ -35,7 +37,9 @@ export function normalizeMemoryPayload(value) {
 export function validateMemoryRequest(message, { record, tab, cooldownRemaining = 0 } = {}) {
   const payload = normalizeMemoryPayload(message?.payload);
   const tabId = Number(tab?.id);
-  if (payload.capability !== MEMORY_CAPABILITY || message?.pluginId !== MEMORY_PLUGIN_ID) {
+  if (![MEMORY_CAPABILITY, MEMORY_RESUME_CAPABILITY].includes(payload.capability)
+    || (payload.capability === MEMORY_RESUME_CAPABILITY && !payload.resumeAfterDiscard)
+    || message?.pluginId !== MEMORY_PLUGIN_ID) {
     return { ok:false, discarded:false, reason:"invalid-capability" };
   }
   if (!record || record.sourcePluginId !== MEMORY_PLUGIN_ID || record.enabled === false) {

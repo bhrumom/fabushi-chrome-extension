@@ -1,3 +1,4 @@
+import { canonicalTaskScript, taskRecoveryAdapter, probeTaskRecovery, memoryRecoveryTarget } from "./userscript-task-recovery.js";
 import { normalizeUserScript, publicUserScript, userScriptMatches } from "./userscript-core.js";
 import { MEMORY_DISCARD_COOLDOWN_MS, MEMORY_PLUGIN_ID, validateMemoryRequest } from "./userscript-memory-policy.js";
 
@@ -177,12 +178,13 @@ function sourceRevision(source) {
 }
 
 function executableSource(record) {
-  if (record.sourcePluginId !== BUNDLED_PLUGIN_ID) return record.source;
+  if (!canonicalTaskScript(record)) return record.source;
   const revision = sourceRevision(record.source);
   return `(() => {
+    const hostRecovery = (${taskRecoveryAdapter.toString()})({ prepare: true });
     const registry = window.__FABUSHI_USERSCRIPT_REVISIONS__ || (window.__FABUSHI_USERSCRIPT_REVISIONS__ = Object.create(null));
     const current = window.__FABUSHI_AUTO_CONFIRM_INSTANCE__;
-    if (registry[${JSON.stringify(record.id)}] === ${JSON.stringify(revision)} && current?.active) return;
+    if (registry[${JSON.stringify(record.id)}] === ${JSON.stringify(revision)} && current?.active && !hostRecovery.prepared) return;
     registry[${JSON.stringify(record.id)}] = ${JSON.stringify(revision)};
     current?.shutdown?.();
     ${record.source}
@@ -205,9 +207,9 @@ function registerUserScript(record) {
       // The canonical ChatGPT workbench must appear while its document is
       // loading. Its upstream @run-at is document-idle, which can defer the
       // panel until a slow ChatGPT renderer finally reaches load/idle.
-      runAt: record.sourcePluginId === BUNDLED_PLUGIN_ID ? "document_start" : record.runAt.replaceAll("-", "_"),
+      runAt: canonicalTaskScript(record) ? "document_start" : record.runAt.replaceAll("-", "_"),
       allFrames: record.noFrames !== true,
-      world: record.sourcePluginId === "chatgpt-auto-confirm" ? "MAIN" : "USER_SCRIPT",
+      world: canonicalTaskScript(record) ? "MAIN" : "USER_SCRIPT",
     };
     if (current.some((script) => script.id === record.id)) {
       await chrome.userScripts.update([definition]);
@@ -255,7 +257,7 @@ export async function runMatchingScripts(tabId, url, { requireSuccessfulMatches 
           await chrome.userScripts.execute({
             target: { tabId, allFrames: record.noFrames !== true },
             js: [{ code: executableSource(record) }],
-            world: record.sourcePluginId === "chatgpt-auto-confirm" ? "MAIN" : "USER_SCRIPT",
+            world: canonicalTaskScript(record) ? "MAIN" : "USER_SCRIPT",
           });
           return;
         }
@@ -288,7 +290,7 @@ export async function installUserScript(message) {
   const existingRecords = await readRecords();
   const previous = existingRecords.find((item) => (message.sourcePluginId && item.sourcePluginId === message.sourcePluginId)
     || (!message.sourcePluginId && item.id === message.id));
-  const record = normalizeUserScript(message.source, {
+  let record = normalizeUserScript(message.source, {
     sourcePluginId: message.sourcePluginId,
     sourcePluginVersion: message.sourcePluginVersion,
     sourceRepository: message.sourceRepository,
@@ -301,6 +303,13 @@ export async function installUserScript(message) {
     installedAt: previous?.installedAt,
     enabled: message.enabled === undefined ? previous?.enabled !== false : message.enabled !== false,
   });
+  // Local imports of the canonical script must replace its managed record,
+  // otherwise the old copy and imported copy run simultaneously and host
+  // capabilities bind to the wrong sourcePluginId.
+  if (!record.sourcePluginId && record.name === "ChatGPT 自动确认 · Fabushi"
+    && record.namespace === "https://fabushi.ombhrum.com/userscripts/chatgpt-auto-confirm") {
+    record = normalizeUserScript(message.source, { ...record, sourcePluginId:BUNDLED_PLUGIN_ID });
+  }
   const records = existingRecords.filter((item) => item.id !== record.id
     && (!record.sourcePluginId || item.sourcePluginId !== record.sourcePluginId));
   records.push(record);
@@ -352,7 +361,7 @@ function pruneMemoryDiscardCooldowns(now = Date.now()) {
   }
 }
 
-async function requestTabMemoryCleanup(message, sender) {
+export async function requestTabMemoryCleanup(message, sender) {
   const pluginId = String(message?.pluginId || "").trim();
   const scriptId = String(message?.scriptId || "").trim();
   if (pluginId !== MEMORY_PLUGIN_ID) throw new Error("内存回收能力只对 ChatGPT 自动确认脚本开放。");
@@ -368,13 +377,52 @@ async function requestTabMemoryCleanup(message, sender) {
   const now = Date.now();
   pruneMemoryDiscardCooldowns(now);
   const key = String(tabId) + ":" + String(record.id);
-  const lastAt = Number(memoryDiscardedAt.get(key) || 0);
+  const checkpointKey = `fabushi.userscript.memory-discard:${tabId}`;
+  // session storage survives MV3 worker suspension and document replacement.
+  const checkpoint = await chrome.storage.session.get(checkpointKey);
+  const lastAt = Math.max(Number(memoryDiscardedAt.get(key) || 0), Number(checkpoint[checkpointKey] || 0));
   const cooldownRemaining = lastAt ? Math.max(0, MEMORY_DISCARD_COOLDOWN_MS - (now - lastAt)) : 0;
   const decision = validateMemoryRequest({ ...message, pluginId }, { record, tab, cooldownRemaining });
   if (!decision.ok || decision.reason !== "ready" || decision.canDiscard !== true) return decision;
-  try { await chrome.tabs.discard(tabId); }
+  let recoveryURL = String(tab.url);
+  if (decision.payload.resumeAfterDiscard && canonicalTaskScript(record)) {
+    const taskCheckpoint = await probeTaskRecovery(tabId);
+    const currentTab = await chrome.tabs.get(tabId).catch(() => null);
+    const target = memoryRecoveryTarget(tab, currentTab, taskCheckpoint);
+    if (!target.ok) return { ok:false, discarded:false, reloaded:false, reason:target.reason, tabId };
+    if (currentTab.active) return { ok:true, discarded:false, reason:"active-tab", tabId };
+    recoveryURL = target.url;
+    tab = currentTab;
+  }
+  // Persist before destruction: if storage fails, retain the live page.
+  await chrome.storage.session.set({ [checkpointKey]:now });
+  let discardedTab;
+  try { discardedTab = await chrome.tabs.discard(tabId); }
   catch { return { ok:false, discarded:false, reason:"discard-failed", tabId }; }
   memoryDiscardedAt.set(key, now);
+  // Chromium can replace WebContents and its extension ID while retaining
+  // the same tab-strip slot. The discard result is the authoritative tab.
+  const resumeTabId = Number.isInteger(discardedTab?.id) ? discardedTab.id : tabId;
+  if (resumeTabId !== tabId) {
+    try {
+    await chrome.storage.session.set({ [`fabushi.userscript.memory-discard:${resumeTabId}`]:now });
+    memoryDiscardedAt.set(String(resumeTabId) + ":" + String(record.id), now);
+    const leaseKey = "fabushi.userscriptRecovery.v1";
+    const leases = (await chrome.storage.local.get(leaseKey))[leaseKey] || {};
+    for (const lease of Object.values(leases)) if (lease?.tabId === tabId) lease.tabId = resumeTabId;
+    await chrome.storage.local.set({ [leaseKey]:leases });
+    } catch (error) {
+      // Destruction already happened: resume the page even if migration fails.
+      console.warn('[Fabushi] 内存恢复记录迁移失败，仍将重载原标签页', error);
+    }
+  }
+  if (decision.payload.resumeAfterDiscard) {
+    try {
+      if (recoveryURL !== String(tab.url)) await chrome.tabs.update(resumeTabId, { url:recoveryURL });
+      await chrome.tabs.reload(resumeTabId);
+      return { ok:true, discarded:true, reloaded:true, reason:"discarded-and-reloaded", tabId:resumeTabId, originalTabId:tabId };
+    } catch { return { ok:false, discarded:true, reloaded:false, reason:"reload-failed", tabId:resumeTabId, originalTabId:tabId }; }
+  }
   return { ok:true, discarded:true, reason:"discarded", tabId };
 }
 

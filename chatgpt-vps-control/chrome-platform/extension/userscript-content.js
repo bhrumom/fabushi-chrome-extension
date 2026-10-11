@@ -1,3 +1,5 @@
+if (globalThis.__FABUSHI_USERSCRIPT_CONTENT_LOADED__ !== 2) {
+globalThis.__FABUSHI_USERSCRIPT_CONTENT_LOADED__ = 2;
 const REQUEST_SOURCE = "fabushi-userscript";
 const RESPONSE_SOURCE = "fabushi-extension";
 const NAVIGATION_PLUGIN_ID = "chatgpt-auto-confirm";
@@ -154,11 +156,20 @@ window.addEventListener("message", (event) => {
         hasDraft: data.payload.hasDraft === true,
         hasPendingAttachment: data.payload.hasPendingAttachment === true,
         userInitiated: data.payload.userInitiated === true,
+        resumeAfterDiscard: data.payload.resumeAfterDiscard === true,
         reason: String(data.payload.reason || "").slice(0, 80),
       } : {},
     }, (response) => {
       const runtimeError = chrome.runtime.lastError;
       postMemoryResponse(data.requestId, runtimeError ? { ok:false, error:runtimeError.message } : response);
+    });
+    return;
+  }
+  if (data.type === "background-clock.request") {
+    chrome.runtime.sendMessage({ type:"fabushi.userscript.clock", delayMs:data.payload?.delayMs }, response => {
+      const error = chrome.runtime.lastError;
+      window.postMessage({ source:RESPONSE_SOURCE, type:"background-clock.response",
+        requestId:String(data.requestId), ok:!error && response?.ok === true }, "*");
     });
     return;
   }
@@ -233,3 +244,11 @@ announceReady();
 window.setInterval(() => {
   if (location.href !== lastUrl || !readyAcknowledged) announceReady();
 }, 1_000);
+
+chrome.runtime.onMessage?.addListener(message => {
+  if (message?.type !== "fabushi.userscript.wake") return false;
+  window.postMessage({ source:RESPONSE_SOURCE, type:"background-wake" }, "*");
+  return false;
+});
+
+}
