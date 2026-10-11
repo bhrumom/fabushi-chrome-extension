@@ -11,7 +11,7 @@ const recoveryPath = new URL("../chrome-platform/extension/userscript-recovery.j
 test("Fabushi host keeps only the system awake while an active recovery lease exists", async () => {
   const manifest = JSON.parse(await readFile(manifestPath, "utf8"));
   const recovery = await readFile(recoveryPath, "utf8");
-  assert.equal(manifest.version, "0.7.0");
+  assert.equal(manifest.version, "0.7.1");
   assert.ok(manifest.permissions.includes("power"));
   assert.match(recovery, /requestKeepAwake\(["']system["']\)/);
   assert.doesNotMatch(recovery, /requestKeepAwake\(["']display["']\)/);

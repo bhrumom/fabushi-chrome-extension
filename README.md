@@ -9,7 +9,7 @@ Product builds, CI, Releases, and dependency boundaries are maintained here inde
 after the migration acceptance gates pass. Do not add credentials or source paths owned by
 another platform repository.
 
-Current browser release candidate: `0.6.23`. It does not bundle the ChatGPT auto-confirm
+Current browser release: `0.7.1`. It does not bundle the ChatGPT auto-confirm
 userscript. The extension fetches the stable `@updateURL` / `@downloadURL`, compares `@version`,
 and upgrades the installed script while retaining its enabled state and identity.
 
@@ -53,3 +53,7 @@ The canonical product/architecture/UI parity specification is:
 `docs/specs/grok-bot-0.18-chrome-extension-architecture-product-ui-parity.md`
 
 The target is the Chrome-extension edition of Grok Bot 0.18 under Fabushi identity, while preserving all existing Fabushi Chrome capabilities. Migration uses per-source-file audit/disposition plus per-product-responsibility Chrome implementation; it does not require one-to-one target files.
+
+## 0.7.1 paired recovery release
+
+Publishes the merged background/project dispatch and task-preserving recovery fixes from PR #24. The paired standalone userscript is 2.10.45 (PR #160). Persistent loading is owned by the responsive script; the host defers rescue during loading and fresh recovery heartbeats. Natural prolonged renderer-freeze acceptance remains unresolved; existing regression and packaged recovery E2E checks are retained.

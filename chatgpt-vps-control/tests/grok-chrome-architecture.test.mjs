@@ -10,7 +10,7 @@ const source = (name) => readFile(join(extension, name), "utf8");
 
 test("toolbar opens the full extension app instead of using app.html as a popup", async () => {
   const manifest = JSON.parse(await source("manifest.json"));
-  assert.equal(manifest.version, "0.7.0");
+  assert.equal(manifest.version, "0.7.1");
   assert.equal(manifest.action.default_popup, undefined);
 
   const broker = await source("agent-broker.js");
