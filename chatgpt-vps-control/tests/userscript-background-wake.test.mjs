@@ -122,3 +122,20 @@ test('project conversation sender receives a normal root dispatch lease without 
  for(const bad of ['https://example.org/g/g-p-123/c/test','https://chatgpt.com/g/other/c/test','https://chatgpt.com/g/g-p-123/project']){url=bad;const r=await request();assert.equal(r.granted,false);assert.equal(r.reason,'invalid-request');}
  url='https://chatgpt.com/g/g-p-123/c/test';message.payload.targetURL='https://chatgpt.com/g/g-p-123/project';const r=await request();assert.equal(r.granted,false);assert.equal(r.reason,'invalid-request');
 });
+
+for(const kind of ['valid','replay','foreign-owner','stale-round','foreign-route','ordinary-lease','child-frame'])test(`host reload commit validates recovery lease: ${kind}`,async()=>{
+ const source=await readFile(new URL('userscript-navigation-guard.js',root),'utf8');let handler,stored={};const reloads=[];let url='https://chatgpt.com/c/original';
+ const context=vm.createContext({URL,Date,crypto:{randomUUID:()=>Math.random().toString()},chrome:{storage:{session:{get:async()=>stored,set:async v=>{stored=v;}}},runtime:{onMessage:{addListener:fn=>handler=fn}},tabs:{get:async()=>({id:7,url,status:'complete'}),reload:async(...args)=>reloads.push(args),onUpdated:{addListener:()=>{}},onRemoved:{addListener:()=>{}}}}});vm.runInContext(source,context);
+ const sender={frameId:0,url,tab:{id:7,url}};
+ const payload={capability:'tab-navigation-guard',ownerTabId:'owner',taskId:'task',targetURL:url,phase:'review',round:4,goalRevision:2,recovery:kind!=='ordinary-lease',hostReload:true,force:true};
+ const call=message=>new Promise(resolve=>handler(message,sender,resolve));
+ const lease=await call({type:'fabushi.userscript.navigation.request',pluginId:'chatgpt-auto-confirm',payload});
+ const commit={type:'fabushi.userscript.navigation.commit',pluginId:'chatgpt-auto-confirm',payload:{...payload,leaseId:lease.leaseId}};
+ if(kind==='foreign-owner')commit.payload.ownerTabId='foreign';
+ if(kind==='stale-round')commit.payload.round++;
+ if(kind==='foreign-route')url='https://chatgpt.com/c/another';
+ if(kind==='child-frame')sender.frameId=1;
+ const result=await call(commit);
+ if(['valid','replay'].includes(kind)){assert.equal(result.granted,true);assert.equal(reloads.length,1);assert.equal(reloads[0][0],7);assert.equal(reloads[0][1].bypassCache,true);if(kind==='replay'){const again=await call(commit);assert.equal(again.granted,false);assert.equal(reloads.length,1);}}
+ else{assert.equal(result.granted,false);assert.equal(reloads.length,0);}
+});
