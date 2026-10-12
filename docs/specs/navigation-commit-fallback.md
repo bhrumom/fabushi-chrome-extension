@@ -48,3 +48,16 @@ Pending verification; final statuses will be recorded after checks.
 ## Verification record
 Passed: deterministic source generation and syntax checks; userscript full suite 419 total, 412 pass, 7 skipped, 0 failures. Host listener suite 15 pass, 0 failures. Review complete/next and rejection cases; same-document one-shot and post-grant pause/round/draft checks passed.
 Blocked: installed original conversation acceptance pending live installation/site availability; tests do not prove service/network recovery.
+
+| Requirement / AC | Final status | Evidence |
+| --- | --- | --- |
+| R1 | passed | One-shot helper invoked at failed recovery commit and legacy exhaustion. |
+| R2 | passed | Safety gates and post-grant pause/round/draft fixtures. |
+| R3 | passed | 7 real-host lease fixtures, including one native reload and replay rejection. |
+| R4 | passed | Attempt recorded before await; duplicate request fixture; normal reset clears budget. |
+| R5 | passed | Goal/token/route retained in fixtures; failure logged; no Send path added. |
+| AC1 | passed | Matching host lease calls original tab ID 7 exactly once. |
+| AC2 | passed | Source and fixture identity assertions; no tab creation or Send in fallback. |
+| AC3 | blocked | Original 2026-10-11 incident tab no longer available; live forced stall not reproduced. |
+
+Installation: 2.10.48 imported successfully in native Fabushi UI on 2026-10-12. Two extension source files verified against this tree and copied into the loaded unpacked directory; Chrome UI confirmed extension reload. Entire installed 0.7.0 directory is not claimed identical to repository 0.7.1. Existing tasks were not manually resubmitted. Concurrent user navigation prevented a reliable final task-progress observation.
