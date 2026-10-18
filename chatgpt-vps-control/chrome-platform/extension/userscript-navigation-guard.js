@@ -103,6 +103,7 @@ function normalizeRequest(message, sender, tab) {
     reason:safeText(payload.reason, 80) || "route-switch",
     force:payload.force === true,
     recovery:payload.recovery === true,
+    hostReload:payload.hostReload === true,
     at:Date.now(),
     tabURL:String(tab?.url || tab?.pendingUrl || "").slice(0, 2000),
   };
@@ -194,6 +195,7 @@ async function requestNavigationGuard(message, sender) {
       goalRevision:request.goalRevision,
       at:now,
       recovery:request.recovery,
+      hostReload:request.hostReload,
     };
     state.tabs[key] = record;
     const entries = Object.entries(state.tabs)
@@ -210,6 +212,37 @@ async function requestNavigationGuard(message, sender) {
       minIntervalMs:NAVIGATION_COOLDOWN_MS,
       reason:forced ? "forced" : "granted",
     };
+  });
+}
+
+async function commitHostReload(message, sender) {
+  return serial(async () => {
+    const { tabId } = senderTab(sender);
+    if (sender.frameId !== 0) return deny("invalid-frame");
+    if (safeText(message.pluginId,64) !== PLUGIN_ID) return deny("invalid-plugin");
+    const payload = message.payload || {};
+    if (payload.capability !== CAPABILITY) return deny("invalid-capability");
+    const state = await readState();
+    const record = state.tabs[String(tabId)];
+    const lease = record?.inFlight;
+    if (!lease || !lease.recovery || !lease.hostReload || Date.now() - lease.at > IN_FLIGHT_TTL_MS
+      || lease.leaseId !== safeText(payload.leaseId,128)) return deny("invalid-lease");
+    const tab = await chrome.tabs.get(tabId);
+    const target = chatGPTURL(payload.targetURL, { allowRecoveryHash:true });
+    const { samePage, rescueSameTab } = await import("./userscript-tab-rescue.js");
+    if (!target || target !== lease.targetURL || !samePage(target, tab.url)
+      || !samePage(target, sender.url) || (tab.pendingUrl && !samePage(target, tab.pendingUrl)) || tab.status === "loading" || isCrashTab(tab)) return deny("stale-route");
+    if (safeText(payload.ownerTabId) !== lease.ownerTabId || safeText(payload.taskId) !== lease.taskId
+      || String(payload.phase || "work") !== lease.phase || Number(payload.round || 0) !== lease.round
+      || Number(payload.goalRevision || 0) !== lease.goalRevision) return deny("stale-generation");
+    const { probeScriptPage } = await import("./userscript-tab-health.js");
+    const health = await probeScriptPage(tabId);
+    if (health.protected) return deny("protected-input");
+    record.inFlight = null;
+    record.updatedAt = Date.now();
+    await writeState(state);
+    await rescueSameTab(tabId, tab.url, target);
+    return { granted:true, capability:CAPABILITY, reason:"host-reload-requested" };
   });
 }
 
@@ -284,6 +317,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (!message || typeof message !== "object") return false;
   const handler = message.type === "fabushi.userscript.navigation.request"
     ? requestNavigationGuard
+    : message.type === "fabushi.userscript.navigation.commit"
+      ? commitHostReload
     : message.type === "fabushi.userscript.navigation.cancel"
       ? cancelNavigationGuard
       : null;

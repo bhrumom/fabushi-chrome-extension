@@ -1,0 +1,20 @@
+import {test} from 'node:test';
+import assert from 'node:assert/strict';
+const local={},session={},handlers=[],events=[];
+const source='https://chatgpt.com/c/recovery';let url=source;
+const storage=data=>({get:async keys=>Object.fromEntries((Array.isArray(keys)?keys:[keys]).map(k=>[k,structuredClone(data[k])])),set:async v=>Object.assign(data,structuredClone(v))});
+let protectedInput=false;
+globalThis.chrome={scripting:{executeScript:async()=>[{result:{healthy:true,protected:protectedInput}}]},storage:{local:storage(local),session:storage(session)},runtime:{getURL:p=>'chrome-extension://test/'+p,onMessage:{addListener:h=>handlers.push(h)}},tabs:{get:async()=>({id:7,url,status:'complete'}),update:async(id,p)=>{events.push(p);url=p.url;},onUpdated:{addListener(){}},onRemoved:{addListener(){}}},debugger:{attach:async()=>{},sendCommand:async()=>{},detach:async()=>{}}};
+await import('../chrome-platform/extension/userscript-navigation-guard.js');
+const sender={frameId:0,url:source,tab:{id:7,url:source}};
+const call=(type,payload)=>new Promise(resolve=>handlers[0]({type:'fabushi.userscript.navigation.'+type,pluginId:'chatgpt-auto-confirm',payload},sender,resolve));
+test('host commit validates exact lease generation and retains the recovery token through transit',async()=>{
+ const payload={capability:'tab-navigation-guard',ownerTabId:'owner',taskId:'task',phase:'work',round:2,goalRevision:3,targetURL:source+'#fabushi-resume=saved-ticket',recovery:true,hostReload:true};
+ const lease=await call('request',payload);assert.equal(lease.granted,true);
+ assert.equal((await call('commit',{...payload,round:9,leaseId:lease.leaseId})).granted,false);assert.equal(events.length,0);
+ protectedInput=true;assert.equal((await call('commit',{...payload,leaseId:lease.leaseId})).reason,'protected-input');assert.equal(events.length,0);protectedInput=false;
+ const result=await call('commit',{...payload,leaseId:lease.leaseId});assert.equal(result.granted,true);
+ assert.match(events[0].url,/tab-rescue.html/);
+ const pending=session['fabushi.tabRescue.v1'][7];assert.equal(pending.recoveryURL,payload.targetURL);
+ assert.equal((await call('commit',{...payload,leaseId:lease.leaseId})).granted,false);
+});
