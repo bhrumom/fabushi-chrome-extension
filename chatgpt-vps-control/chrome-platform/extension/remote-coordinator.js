@@ -45,6 +45,7 @@ export function createRemoteCoordinatorTransport({
 
   function clearPending(reason) {
     for (const [requestId, item] of pending) {
+      clearTimeout(item.timer);
       item.reject(Object.assign(new Error(reason), {
         code: "coordinator-transport-lost",
         delivery: "unknown",
@@ -61,8 +62,9 @@ export function createRemoteCoordinatorTransport({
 
   async function scheduleReconnect() {
     clearReconnectTimer();
+    const scheduledEpoch = epoch;
     const current = await sessionProvider().catch(() => null);
-    if (!current?.accessToken) return;
+    if (scheduledEpoch !== epoch || !current?.accessToken) return;
     const delay = reconnectDelayMs;
     reconnectDelayMs = Math.min(reconnectDelayMs * 2, MAX_BACKOFF_MS);
     reconnectTimer = setTimeout(() => {

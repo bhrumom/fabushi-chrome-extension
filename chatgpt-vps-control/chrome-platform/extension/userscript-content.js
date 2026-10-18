@@ -64,6 +64,7 @@ function navigationPayload(payload) {
     reason: String(value.reason || "route-switch").slice(0, 80),
     force: value.force === true,
     recovery: value.recovery === true,
+    hostReload: value.hostReload === true,
   };
 }
 
@@ -105,6 +106,16 @@ window.addEventListener("message", (event) => {
     }, (response) => {
       const runtimeError = chrome.runtime.lastError;
       postNavigationResponse(data.requestId, runtimeError ? { ok:false, error:runtimeError.message } : response);
+    });
+    return;
+  }
+  if (data.type === "navigation-guard.commit") {
+    chrome.runtime.sendMessage({ type:"fabushi.userscript.navigation.commit",
+      requestId:String(data.requestId), pluginId:String(data.pluginId || NAVIGATION_PLUGIN_ID).slice(0,64),
+      payload:{ ...navigationPayload(data.payload), leaseId:String(data.payload?.leaseId || "").slice(0,128) },
+    }, response => {
+      const error = chrome.runtime.lastError;
+      postNavigationResponse(data.requestId, error ? { ok:false, reason:"host-unavailable", error:error.message } : response);
     });
     return;
   }

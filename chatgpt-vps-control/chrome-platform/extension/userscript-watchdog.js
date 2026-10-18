@@ -6,6 +6,7 @@ import { RESCUE_KEY, rescueSameTab, restoreRescue, samePage, webURL } from "./us
 export const WATCHDOG_KEY = "fabushi.scriptTabWatchdog.v1";
 export const HISTORY_KEY = "fabushi.scriptTabRecoveryHistory.v1";
 export const UNHEALTHY_MS = 90_000;
+export const LOADING_GRACE_MS = 120_000;
 const COOLDOWN_MS = 120_000;
 const BUDGET_MS = 10 * 60_000;
 let scanPromise;
@@ -95,8 +96,12 @@ export function scanManagedTabs(trigger = "alarm", { now = Date.now, probe = pro
     for (const key of Object.keys(records)) if (!alive.has(key)) delete records[key];
     const observations = await Promise.all(candidates.map(async tab => {
       const observation = records[tab.id];
-      if (tab.status === "loading" || (samePage(observation?.url, tab.url) && Number(observation?.settleUntil || 0) > now())) {
-        return { tab, deferred: true, deferReason: "restored-or-loading-document" };
+      const loadingSince = tab.status === "loading"
+        ? (samePage(observation?.url, tab.url) && observation?.loadingSince || now()) : 0;
+      const loadingStalled = Boolean(loadingSince && now() - loadingSince >= LOADING_GRACE_MS);
+      if (pending[tab.id] || (tab.status === "loading" && !loadingStalled)
+        || (samePage(observation?.url, tab.url) && Number(observation?.settleUntil || 0) > now())) {
+        return { tab, loadingSince, deferred: true, deferReason: "restored-or-loading-document" };
       }
       if (tab.discarded || tab.frozen || (tab.pendingUrl && !samePage(tab.url, tab.pendingUrl))) return { tab, deferred: true };
       const canonical = scripts.some(script => canonicalTaskScript(script) && userScriptMatches(script, tab.url));
@@ -104,15 +109,16 @@ export function scanManagedTabs(trigger = "alarm", { now = Date.now, probe = pro
         return { tab, deferred:true, deferReason:"task-script-responsive" };
       }
       const [health, checkpoint] = await Promise.all([probe(tab.id), canonical ? probeTaskRecovery(tab.id) : null]);
-      return { tab, health, checkpoint };
+      return { tab, health, checkpoint, loadingSince, loadingStalled };
     }));
-    for (const { tab, health, checkpoint, deferred, deferReason } of observations) {
+    for (const { tab, health, checkpoint, deferred, deferReason, loadingSince, loadingStalled } of observations) {
       const timestamp = now();
       const previous = records[tab.id];
       const record = previous && samePage(previous.url, tab.url) ? previous
         : { tabId: tab.id, url: tab.url, recoveryCount: 0, unhealthySince: 0 };
       records[tab.id] = record;
       record.url = tab.url;
+      record.loadingSince = loadingSince || 0;
       if (deferred) {
         record.unhealthySince = 0;
         record.lastHealthReason = deferReason || "browser-suspended-or-navigating";
@@ -149,7 +155,7 @@ export function scanManagedTabs(trigger = "alarm", { now = Date.now, probe = pro
         continue;
       }
       const current = await chrome.tabs.get(tab.id).catch(() => null);
-      if (!current || current.status === "loading" || current.discarded || current.frozen || !samePage(current.url, tab.url)
+      if (!current || (current.status === "loading" && !loadingStalled) || current.discarded || current.frozen || !samePage(current.url, tab.url)
         || (current.pendingUrl && !samePage(current.pendingUrl, tab.url))) continue;
       // Recheck draft/navigation immediately before the destructive unload.
       const finalHealth = await probe(tab.id);
@@ -167,7 +173,7 @@ export function scanManagedTabs(trigger = "alarm", { now = Date.now, probe = pro
       if (history.length > 100) history.splice(0, history.length - 100);
       await chrome.storage.session.set({ [WATCHDOG_KEY]: records, [HISTORY_KEY]: history });
       try {
-        const result = await rescue(tab.id, current.url, recoveryURL);
+        const result = await rescue(tab.id, current.url, recoveryURL, { allowLoading: loadingStalled });
         record.lastRecoveryAction = result.action;
         event.status = "restoration-dispatched";
         event.action = result.action;

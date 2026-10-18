@@ -221,3 +221,39 @@ test("unclaimed task repair validates route, task ownership and draft before sam
     assert.equal(session["fabushi.scriptTabRecoveryHistory.v1"][0].trigger, "explicit-task-repair");
   } finally { chrome.scripting.executeScript = original; }
 });
+
+test('indefinitely loading failed renderer is recovered only after grace plus continuous failures', async()=>{
+ reset(); let time=Date.now(); tabs[0].status='loading';
+ await scanManagedTabs('loading',{now:()=>time,probe:failed});
+ time+=120000; await scanManagedTabs('grace',{now:()=>time,probe:failed});
+ assert.equal(events.length,0);
+ time+=89999; await scanManagedTabs('not-yet',{now:()=>time,probe:failed}); assert.equal(events.length,0);
+ time++; await scanManagedTabs('stalled',{now:()=>time,probe:failed});
+ assert.equal(events.filter(e=>e[0]==='Runtime.terminateExecution').length,1);
+ assert.equal(session[RESCUE_KEY][10].allowLoading,true);
+});
+for(const kind of ['discard','replacement','protected','moved','refused'])test(`stalled transit fallback: ${kind}`,async()=>{
+ reset(); const original={update:chrome.tabs.update,discard:chrome.tabs.discard,executeScript:chrome.scripting.executeScript};
+ const resume=url+'#fabushi-resume=checkpoint';
+ try{
+  // tabs.update accepted the navigation but its renderer never committed it.
+  chrome.tabs.update=async(id,patch)=>{events.push(['update',id,patch]);};
+  await rescueSameTab(10,url,resume);
+  const started=session[RESCUE_KEY][10].startedAt;
+  await restoreRescue(10); assert.equal(session[RESCUE_KEY][10].startedAt,started);
+  session[RESCUE_KEY][10].startedAt=Date.now()-31000;
+  chrome.scripting.executeScript=async()=>[{result:{healthy:kind==='protected',protected:kind==='protected'}}];
+  chrome.tabs.update=original.update;
+  if(kind==='moved')tabs[0].pendingUrl='https://example.com/';
+  if(kind==='refused')tabs[0].active=true;
+  if(kind==='replacement')chrome.tabs.discard=async id=>{events.push(['discard',id]);tabs[0].id=11;tabs[0].discarded=true;return clone(tabs[0]);};
+  if(kind==='refused'){
+   await assert.rejects(restoreRescue(10),/active/); await assert.rejects(restoreRescue(10),/active/);
+   assert.equal(await restoreRescue(10),false); assert.equal(events.filter(e=>e[0]==='discard').length,2);
+  }else{
+   await restoreRescue(10);
+   if(['protected','moved'].includes(kind))assert.equal(events.some(e=>e[0]==='discard'),false);
+   else {assert.equal(tabs[0].url,resume); assert.equal(tabs[0].id,kind==='replacement'?11:10);assert.equal(tabs[0].index,2);assert.equal(tabs[0].groupId,8);assert.deepEqual(session[RESCUE_KEY],{});}
+  }
+ }finally{chrome.tabs.update=original.update;chrome.tabs.discard=original.discard;chrome.scripting.executeScript=original.executeScript;}
+});
