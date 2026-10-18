@@ -213,3 +213,16 @@ test("remote Coordinator refuses to become ready without an account session", as
   assert.equal(status.connected, false);
   assert.match(status.error, /account login is required/i);
 });
+
+test('close fences an account lookup already awaiting reconnect and clears its pending request timer',async()=>{
+ const factory=await loadFactory();let delayLookup=false,resolveLookup;const alarms=[];
+ const transport=factory({sessionProvider:()=>delayLookup?new Promise(resolve=>{resolveLookup=resolve;}):Promise.resolve({accessToken:'fixture'}),alarms:{create:(...args)=>alarms.push(args)}});
+ const status=transport.status();const socket=await waitForSocket();socket.open();socket.message({kind:'authenticated',protocolVersion:1});await status;
+ const pending=transport.call({clientId:'view',requestId:'pending-before-close',method:'sendPrompt',args:{}});
+ await waitForFrame(socket,f=>f.requestId==='pending-before-close');
+ delayLookup=true;socket.close(1006,'lost');
+ await assert.rejects(pending,e=>e.delivery==='unknown');
+ assert.equal(typeof resolveLookup,'function');transport.close();resolveLookup({accessToken:'fixture'});
+ await new Promise(resolve=>setImmediate(resolve));
+ assert.equal(alarms.length,0,'closed generation cannot rearm reconnect');
+});

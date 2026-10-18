@@ -32,3 +32,6 @@ R1 / AC4 manual recovery: passed, original route restored and later tool activit
 R2-R5 / AC1-AC2: passed in focused behavioral regressions. Host tests cover loading grace plus continuous failure, stalled transit deadline retention, discard/replacement/protected/foreign navigation/refusal, and exact-lease token commit. Script tests cover durable token in grant and commit, pause/round/draft/denial fences and storage failure. Complete regression and exact-head CI are delivery gates below.
 R6 / AC3: blocked pending exact-head CI, publication and installed readback.
 New installed automatic natural-freeze acceptance: blocked pending runtime evidence.
+
+## Validation blocker reconciliation
+The exact-head host Actions job did not exit after its Coordinator assertions. Local execution reproduces retained reconnect timers: scheduleReconnect awaits account lookup and may install a timer after reconnect/close already invalidated that generation. Pending request timers also survive clearPending. Required delivery repair: fence the awaited reconnect lookup by transport epoch and cancel request timers when clearing pending calls. Keep all protocol and unknown-delivery assertions; do not hide this leak with forced process exit in CI.
