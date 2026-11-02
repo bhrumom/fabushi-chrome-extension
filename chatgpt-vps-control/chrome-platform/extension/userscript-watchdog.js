@@ -1,6 +1,6 @@
 import { userScriptMatches } from "./userscript-core.js";
 import { canonicalTaskScript, probeTaskRecovery } from "./userscript-task-recovery.js";
-import { probeScriptPage } from "./userscript-tab-health.js";
+import { probeBlackFrame, probeScriptPage } from "./userscript-tab-health.js";
 import { RESCUE_KEY, rescueSameTab, restoreRescue, samePage, webURL } from "./userscript-tab-rescue.js";
 
 export const WATCHDOG_KEY = "fabushi.scriptTabWatchdog.v1";
@@ -79,7 +79,7 @@ export function recoveryDestination(tab, leases, canonical = false) {
   return lease?.recoveryURL || tab.url;
 }
 
-export function scanManagedTabs(trigger = "alarm", { now = Date.now, probe = probeScriptPage, rescue = rescueSameTab } = {}) {
+export function scanManagedTabs(trigger = "alarm", { now = Date.now, probe = probeScriptPage, visual = probeBlackFrame, rescue = rescueSameTab } = {}) {
   if (scanPromise) return scanPromise;
   scanPromise = (async () => {
     const data = await chrome.storage.local.get(["fabushi.userscripts.v1", "fabushi.userscriptRecovery.v1"]);
@@ -108,7 +108,10 @@ export function scanManagedTabs(trigger = "alarm", { now = Date.now, probe = pro
       if (canonical && scriptResponsive(tab, data["fabushi.userscriptRecovery.v1"], now())) {
         return { tab, deferred:true, deferReason:"task-script-responsive" };
       }
-      const [health, checkpoint] = await Promise.all([probe(tab.id), canonical ? probeTaskRecovery(tab.id) : null]);
+      let [health, checkpoint] = await Promise.all([probe(tab.id), canonical ? probeTaskRecovery(tab.id) : null]);
+      if (health.healthy && !health.protected && await visual(tab) === true) {
+        health = { healthy: false, reason: "black-frame" };
+      }
       return { tab, health, checkpoint, loadingSince, loadingStalled };
     }));
     for (const { tab, health, checkpoint, deferred, deferReason, loadingSince, loadingStalled } of observations) {
@@ -158,7 +161,10 @@ export function scanManagedTabs(trigger = "alarm", { now = Date.now, probe = pro
       if (!current || (current.status === "loading" && !loadingStalled) || current.discarded || current.frozen || !samePage(current.url, tab.url)
         || (current.pendingUrl && !samePage(current.pendingUrl, tab.url))) continue;
       // Recheck draft/navigation immediately before the destructive unload.
-      const finalHealth = await probe(tab.id);
+      let finalHealth = await probe(tab.id);
+      if (finalHealth.healthy && !finalHealth.protected && await visual(current) === true) {
+        finalHealth = { healthy: false, reason: "black-frame" };
+      }
       if (finalHealth.healthy || finalHealth.protected) { record.unhealthySince = 0; continue; }
       const canonical = scripts.some(script => canonicalTaskScript(script) && userScriptMatches(script, current.url));
       const recoveryURL = recoveryDestination(current, data["fabushi.userscriptRecovery.v1"], canonical);

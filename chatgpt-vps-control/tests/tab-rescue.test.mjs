@@ -26,7 +26,7 @@ globalThis.chrome = {
 };
 const { rescueSameTab, restoreRescue, RESCUE_KEY } = await import("../chrome-platform/extension/userscript-tab-rescue.js");
 const { scanManagedTabs, WATCHDOG_KEY, repairUnclaimedTask } = await import("../chrome-platform/extension/userscript-watchdog.js");
-const { probeScriptPage } = await import("../chrome-platform/extension/userscript-tab-health.js");
+const { probeScriptPage, probeBlackFrame } = await import("../chrome-platform/extension/userscript-tab-health.js");
 function reset() {
   events.length = 0;
   for (const data of [session, local]) for (const key of Object.keys(data)) delete data[key];
@@ -180,6 +180,84 @@ test("an unresponsive probe returns within its deadline rather than blocking sca
   chrome.scripting.executeScript = () => new Promise(() => {});
   try { assert.equal((await probeScriptPage(10, 10)).reason, "probe-timeout"); }
   finally { chrome.scripting.executeScript = original; }
+});
+test("a DOM-healthy black frame requires continuous failure and a final black recheck", async () => {
+  reset(); tabs[0].active = true; tabs[0].windowId = 3;
+  let time = 1_000_000, black = true;
+  const healthy = async () => ({ healthy: true, reason: "content-visible" });
+  const visual = async () => black;
+  await scanManagedTabs("first-black", { now: () => time, probe: healthy, visual });
+  assert.equal(session[WATCHDOG_KEY][10].lastHealthReason, "black-frame");
+  time += 89_999;
+  await scanManagedTabs("still-black", { now: () => time, probe: healthy, visual });
+  assert.equal(events.length, 0);
+  time += 1; black = false;
+  await scanManagedTabs("recovered-frame", { now: () => time, probe: healthy, visual });
+  assert.equal(session[WATCHDOG_KEY][10].unhealthySince, 0);
+  black = true;
+  await scanManagedTabs("black-again", { now: () => time, probe: healthy, visual });
+  time += 90_000;
+  let calls = 0;
+  await scanManagedTabs("final-frame-recovered", { now: () => time, probe: healthy,
+    visual: async () => ++calls === 1 });
+  assert.equal(events.length, 0);
+  await scanManagedTabs("black-confirmed", { now: () => time, probe: healthy, visual });
+  time += 90_000;
+  await scanManagedTabs("black-confirmed-after-threshold", { now: () => time, probe: healthy, visual });
+  assert.equal(events.filter(event => event[0] === "Runtime.terminateExecution").length, 1);
+});
+test("visual capture is inconclusive outside the focused active tab", async () => {
+  reset(); tabs[0].windowId = 3;
+  assert.equal(await probeBlackFrame(tabs[0]), null);
+  tabs[0].active = true;
+  const original = chrome.windows;
+  chrome.windows = { get: async () => ({ focused: false }) };
+  try { assert.equal(await probeBlackFrame(tabs[0]), null); }
+  finally { chrome.windows = original; }
+});
+test("viewport sampling distinguishes a uniformly black frame from dark-mode content", async () => {
+  reset(); tabs[0].active = true; tabs[0].windowId = 3;
+  const previous = { windows: chrome.windows, capture: chrome.tabs.captureVisibleTab,
+    bitmap: globalThis.createImageBitmap, canvas: globalThis.OffscreenCanvas };
+  let darkPixels = 256, closed = 0;
+  chrome.windows = { get: async () => ({ focused: true }) };
+  chrome.tabs.captureVisibleTab = async () => "data:image/jpeg;base64,AA==";
+  globalThis.createImageBitmap = async () => ({ close() { closed++; } });
+  globalThis.OffscreenCanvas = class {
+    getContext() { return { drawImage() {}, getImageData() {
+      const data = new Uint8ClampedArray(16 * 16 * 4);
+      for (let i = 0; i < 256; i++) {
+        const offset = i * 4;
+        data[offset] = data[offset + 1] = data[offset + 2] = i < darkPixels ? 0 : 220;
+        data[offset + 3] = 255;
+      }
+      return { data };
+    } }; }
+  };
+  try {
+    assert.equal(await probeBlackFrame(tabs[0]), true);
+    darkPixels = 240;
+    assert.equal(await probeBlackFrame(tabs[0]), false);
+    assert.equal(closed, 2);
+  } finally {
+    chrome.windows = previous.windows;
+    chrome.tabs.captureVisibleTab = previous.capture;
+    globalThis.createImageBitmap = previous.bitmap;
+    globalThis.OffscreenCanvas = previous.canvas;
+  }
+});
+test("protected DOM input and inconclusive captures never trigger black-frame rescue", async () => {
+  reset(); tabs[0].active = true; tabs[0].windowId = 3;
+  let time = 1_000_000, calls = 0;
+  const visual = async () => { calls++; return true; };
+  await scanManagedTabs("protected", { now: () => time,
+    probe: async () => ({ healthy: true, protected: true }), visual });
+  assert.equal(calls, 0);
+  time += 90_000;
+  await scanManagedTabs("inconclusive", { now: () => time,
+    probe: async () => ({ healthy: true }), visual: async () => null });
+  assert.equal(events.length, 0);
+  assert.equal(session[WATCHDOG_KEY][10].unhealthySince, 0);
 });
 test("worker eviction after persisting destination resumes unload in the same tab", async () => {
   reset();
