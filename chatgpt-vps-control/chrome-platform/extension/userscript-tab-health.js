@@ -13,9 +13,54 @@ export function inspectScriptPage() {
     || [...document.querySelectorAll('[data-testid*="attachment"], [data-testid*="file-preview"]')].some(visible);
   if (hasDraft || hasAttachment) return { healthy: true, protected: true, reason: "protected-input" };
   const body = document.body;
-  const text = body && visible(body) && String(body.innerText || "").trim();
-  const content = [...document.querySelectorAll('button, a[href], textarea, input, [contenteditable=true], img, svg, canvas, video, iframe')].some(visible);
+  // Reading body.innerText forces layout and serializes an entire long chat.
+  // A bounded set of visible controls/text nodes suffices for DOM liveness.
+  const content = [...document.querySelectorAll('button, a[href], textarea, input, [contenteditable=true], img, svg, canvas, video, iframe')].slice(0, 80).some(visible);
+  const text = !content && body && visible(body) && [...body.querySelectorAll('h1, h2, p, [role="main"]')].slice(0, 20)
+    .some(element => visible(element) && Boolean(element.textContent?.trim()));
   return { healthy: Boolean(text || content), reason: text || content ? "content-visible" : "blank-document" };
+}
+
+const visualOperations = new Set();
+
+// Runs in the extension worker, independently of a page's DOM and JS stack.
+export async function probeBlackFrame(tab) {
+  if (!tab?.active || !Number.isInteger(tab.windowId)) return null;
+  if (visualOperations.has(tab.windowId)) return null;
+  visualOperations.add(tab.windowId);
+  const work = captureBlackFrame(tab).finally(() => visualOperations.delete(tab.windowId));
+  let timer;
+  try {
+    return await Promise.race([work, new Promise(resolve => {
+      timer = setTimeout(() => resolve(null), 5_000);
+    })]);
+  } finally { clearTimeout(timer); }
+}
+
+async function captureBlackFrame(tab) {
+  try {
+    const win = await chrome.windows.get(tab.windowId);
+    if (!win.focused) return null;
+    const active = await chrome.tabs.query({ active: true, windowId: tab.windowId });
+    if (active.length !== 1 || active[0].id !== tab.id) return null;
+    const url = await chrome.tabs.captureVisibleTab(tab.windowId, { format: "jpeg", quality: 20 });
+    const response = await fetch(url);
+    const bitmap = await createImageBitmap(await response.blob());
+    try {
+      const canvas = new OffscreenCanvas(16, 16);
+      const context = canvas.getContext("2d", { willReadFrequently: true });
+      if (!context) return null;
+      context.drawImage(bitmap, 0, 0, 16, 16);
+      const pixels = context.getImageData(0, 0, 16, 16).data;
+      let black = 0;
+      for (let i = 0; i < pixels.length; i += 4) {
+        if (pixels[i] < 16 && pixels[i + 1] < 16 && pixels[i + 2] < 16 && pixels[i + 3] > 240) black++;
+      }
+      const current = await chrome.tabs.get(tab.id);
+      const currentWindow = await chrome.windows.get(tab.windowId);
+      return current.active && currentWindow.focused && current.url === tab.url && black >= 252;
+    } finally { bitmap.close(); }
+  } catch { return null; }
 }
 
 export async function probeScriptPage(tabId, timeoutMs = 5_000) {
