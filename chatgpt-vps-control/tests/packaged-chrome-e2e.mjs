@@ -499,6 +499,7 @@ async function verifyIncognitoRescue() {
   } finally {
     await run(`chrome.storage.local.remove(['fabushi.userscripts.v1','fabushi.userscriptRecovery.v1'])`).catch(() => {});
     if (privateWindow?.id) await run(`chrome.windows.remove(${privateWindow.id})`).catch(() => {});
+    await cdp.send("Target.detachFromTarget", {sessionId:workerSession}).catch(() => {});
     await cdp.send("Target.closeTarget", {targetId:controlPage.targetId}).catch(() => {});
     await new Promise(resolve => server.close(resolve));
   }
