@@ -26,6 +26,10 @@ Record a persistent black frame even when a draft is present, while keeping the 
 
 The extension worker samples the viewport as before. Its watchdog stores only a boolean `lastProtectedInput` in session diagnostics and a reason string. A protected observation blocks destructive recovery until a fresh page probe confirms unprotected input. Existing timeout recovery for tabs without a protected observation and existing rescue ownership remain unchanged.
 
+## Release boundary
+
+Version 0.7.5 may package this detection and draft-safety repair after exact-head validation. Its notes must state that the ChatGPT Markdown rendering hang is still under investigation. Do not install or claim a live fix while the same-document isolation comparison is pending. Updating the installed unpacked extension must preserve its ID, script storage and task state, and must happen after the live comparison because reloading the extension invalidates that comparison.
+
 ## Acceptance and compliance
 
 | Item | Status | Evidence |
