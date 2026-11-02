@@ -35,5 +35,9 @@ Publish through the existing tagged release workflow. Update the installed unpac
 
 | Requirement / AC | Status | Evidence / reason |
 | --- | --- | --- |
-| R1-R5 / AC1-AC2 | pending | Implementation, tests and release pending. |
+| R1-R2 / AC1 | passed | `userscript-watchdog.js` requires a continuously black visual sample for 90 seconds and a fresh final sample; `tab-rescue.test.mjs` verifies recovery, reset on a healthy final frame, protected input and inconclusive capture. |
+| R3 | passed | `probeBlackFrame` reads a capture only in worker memory, reduces it to 16×16 pixels, returns only a boolean, and bounds a probe to five seconds. Capture failure is inconclusive. |
+| R4 | passed | Existing `rescueSameTab` and checkpoint adapter are reused. Manifest permissions are unchanged; packaged browser recovery and bootstrap integration passed on PR #31 head `474a28f`. |
+| R5 | passed | DOM health no longer reads `body.innerText`; it inspects limited candidate elements. |
+| AC2 | blocked | Exact-head Actions 41490475502 passed validation and packaged Chrome E2E. Main merge, tagged release and package readback remain pending. |
 | AC3 | blocked | The earlier incident is no longer black; a new natural black-frame observation is required. |
