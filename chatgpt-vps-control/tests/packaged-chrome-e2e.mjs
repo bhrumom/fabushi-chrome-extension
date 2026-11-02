@@ -459,7 +459,10 @@ async function verifyIncognitoRescue() {
   let privateWindow;
   const worker = await waitFor(() => extensionWorker(extensionId), "rescue worker");
   const workerSession = (await cdp.send("Target.attachToTarget", { targetId: worker.targetId, flatten: true })).sessionId;
+  await cdp.send("Runtime.enable", {}, workerSession);
+  await cdp.send("Runtime.runIfWaitingForDebugger", {}, workerSession);
   const run = async expression => (await evaluate(workerSession, expression)).value;
+  console.log("Incognito rescue: worker runtime attached", await run("chrome.runtime.id"));
   await waitFor(async () => await run(`chrome.extension.isAllowedIncognitoAccess()`), "incognito extension permission");
   console.log("Incognito rescue: extension access confirmed");
   try {
