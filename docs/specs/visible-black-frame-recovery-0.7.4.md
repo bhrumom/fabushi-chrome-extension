@@ -39,5 +39,5 @@ Publish through the existing tagged release workflow. Update the installed unpac
 | R3 | passed | `probeBlackFrame` reads a capture only in worker memory, reduces it to 16×16 pixels, returns only a boolean, and bounds a probe to five seconds. Capture failure is inconclusive. |
 | R4 | passed | Existing `rescueSameTab` and checkpoint adapter are reused. Manifest permissions are unchanged; packaged browser recovery and bootstrap integration passed on PR #31 head `474a28f`. |
 | R5 | passed | DOM health no longer reads `body.innerText`; it inspects limited candidate elements. |
-| AC2 | blocked | Exact-head Actions 41490475502 passed validation and packaged Chrome E2E. Main merge, tagged release and package readback remain pending. |
-| AC3 | blocked | The earlier incident is no longer black; a new natural black-frame observation is required. |
+| AC2 | passed | PR #31 merged at `caca3695f0299ed28d4fa8dd49f8f569e06b631a`; main Actions 41491068609 and tag Actions 41491115406 passed. Published v0.7.4 ZIP SHA256 `7b2367b72d386118b9bbdd932eb17f98f4e53e84ea9dd6f50879587bbd45c6ce`, all 36 package files verified, provenance and tag point to the merge commit. Existing unpacked installation was backed up and updated in place; Chrome extension details showed v0.7.4, the same ID `dhkifbfnclknmafelblbhikfecdieoea`, enabled state, and a running Service Worker after reload. |
+| AC3 | blocked | The earlier incident is no longer black. Packaged E2E preserved same tab and task checkpoint, but a new natural long-chat black-frame recovery has not been observed. |
