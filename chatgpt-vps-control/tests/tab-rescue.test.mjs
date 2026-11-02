@@ -202,6 +202,8 @@ test("a DOM-healthy black frame requires continuous failure and a final black re
     visual: async () => ++calls === 1 });
   assert.equal(events.length, 0);
   await scanManagedTabs("black-confirmed", { now: () => time, probe: healthy, visual });
+  time += 90_000;
+  await scanManagedTabs("black-confirmed-after-threshold", { now: () => time, probe: healthy, visual });
   assert.equal(events.filter(event => event[0] === "Runtime.terminateExecution").length, 1);
 });
 test("visual capture is inconclusive outside the focused active tab", async () => {
