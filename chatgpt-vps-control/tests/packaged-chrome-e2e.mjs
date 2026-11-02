@@ -242,7 +242,7 @@ async function loadExactExtension() {
   let lastError;
   for (let attempt = 0; attempt < 2; attempt += 1) {
     try {
-      const loaded = await cdp.send("Extensions.loadUnpacked", { path: extensionDir }, undefined, 30_000);
+      const loaded = await cdp.send("Extensions.loadUnpacked", { path: extensionDir, enableInIncognito: true }, undefined, 30_000);
       assert.equal(String(loaded?.id || ""), extensionId, "Chrome loaded a different unpacked extension identity");
       return loaded;
     } catch (error) {
@@ -439,21 +439,14 @@ async function exampleTabCount(page) {
 }
 
 async function verifyIncognitoRescue() {
-  // Enable incognito only inside this disposable CI profile using Chrome's own
-  // extensions settings API. The production manifest remains spanning.
-  const settings = await cdp.send("Target.createTarget", { url: "chrome://extensions/" });
-  const attached = await cdp.send("Target.attachToTarget", { targetId: settings.targetId, flatten: true });
-  await waitFor(async () => (await evaluate(attached.sessionId,
-    `Boolean(globalThis.chrome?.developerPrivate?.updateExtensionConfiguration)`)).value, "extension settings API");
-  await evaluate(attached.sessionId, `(() => {
-    chrome.developerPrivate.updateExtensionConfiguration({extensionId:${JSON.stringify(extensionId)}, incognitoAccess:true});
-    return true;
-  })()`);
-  console.log("Incognito rescue: extension access requested");
-  await cdp.send("Target.closeTarget", { targetId: settings.targetId });
+  // LoadUnpacked enables incognito in the disposable profile at install time;
+  // toggling it afterward reloads the extension underneath attached targets.
+  const controlPage = await openApp(extensionId);
+  await waitFor(async () => (await evaluate(controlPage.sessionId, `chrome.extension.isAllowedIncognitoAccess()`)).value, "incognito extension permission");
+  await waitFor(async () => (await extensionMessage(controlPage, {type:"fabushi.platform.status"})).response, "initialized extension worker");
   const server = createServer((req, res) => {
     res.writeHead(200, { "content-type": "text/html" });
-    res.end("<!doctype html><title>Incognito rescue fixture</title><p>Same-tab recovery</p>");
+    res.end("<!doctype html><title>Incognito rescue fixture</title><body></body>");
   });
   await new Promise(resolve => server.listen(0, "127.0.0.1", resolve));
   let privateWindow;
@@ -475,7 +468,16 @@ async function verifyIncognitoRescue() {
     console.log("Incognito rescue: source checkpoint prepared");
     const before = await run(`chrome.tabs.get(${tabId})`);
     const recoveryURL = source + "#fabushi-resume=original-checkpoint";
-    const result = await run(`import(chrome.runtime.getURL('userscript-tab-rescue.js')).then(m=>m.rescueSameTab(${tabId},${JSON.stringify(source)},${JSON.stringify(recoveryURL)}))`);
+    // Seed elapsed continuous-failure evidence; keep all actual browser probes,
+    // production watchdog, terminate/transit and completion listeners intact.
+    await run(`Promise.all([
+      chrome.storage.local.set({
+        'fabushi.userscripts.v1':[{id:'incognito-fixture',name:'Recovery fixture',enabled:true,matches:[${JSON.stringify(source + "*")}],code:''}],
+        'fabushi.userscriptRecovery.v1':{fixture:{tabId:${tabId},sourceURL:${JSON.stringify(source)},recoveryURL:${JSON.stringify(recoveryURL)},status:'granted',expiresAt:1}}
+      }),
+      chrome.storage.session.set({'fabushi.scriptTabWatchdog.v1':{[${tabId}]:{tabId:${tabId},url:${JSON.stringify(source)},unhealthySince:Date.now()-91000,lastProbeAt:Date.now(),recoveryCount:0}}})
+    ])`);
+    await run(`chrome.alarms.create('fabushi-userscript-recovery',{when:Date.now()+100})`);
     await waitFor(async () => {
       const tab = await run(`chrome.tabs.get(${tabId})`);
       return tab.url === recoveryURL && tab.status === "complete";
@@ -489,9 +491,15 @@ async function verifyIncognitoRescue() {
     assert.equal(checkpoint[0].result.href, recoveryURL);
     const records = await run(`chrome.storage.session.get('fabushi.tabRescue.v1')`);
     assert.equal(records['fabushi.tabRescue.v1']?.[tabId], undefined);
-    return { passed:true, tabId, sameTab:true, checkpointPreserved:true, recoveryURL, action:result.action };
+    const history = await run(`chrome.storage.session.get('fabushi.scriptTabRecoveryHistory.v1')`);
+    const event = history['fabushi.scriptTabRecoveryHistory.v1'].find(e=>e.tabId===tabId);
+    assert.equal(event.status, 'restoration-dispatched');
+    assert.equal(event.action, 'terminate-transit-original-tab');
+    return { passed:true, tabId, sameTab:true, checkpointPreserved:true, recoveryURL, action:event.action };
   } finally {
+    await run(`chrome.storage.local.remove(['fabushi.userscripts.v1','fabushi.userscriptRecovery.v1'])`).catch(() => {});
     if (privateWindow?.id) await run(`chrome.windows.remove(${privateWindow.id})`).catch(() => {});
+    await cdp.send("Target.closeTarget", {targetId:controlPage.targetId}).catch(() => {});
     await new Promise(resolve => server.close(resolve));
   }
 }
