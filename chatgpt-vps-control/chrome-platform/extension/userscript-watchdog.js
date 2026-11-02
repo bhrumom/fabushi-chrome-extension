@@ -109,8 +109,9 @@ export function scanManagedTabs(trigger = "alarm", { now = Date.now, probe = pro
         return { tab, deferred:true, deferReason:"task-script-responsive" };
       }
       let [health, checkpoint] = await Promise.all([probe(tab.id), canonical ? probeTaskRecovery(tab.id) : null]);
-      if (health.healthy && !health.protected && await visual(tab) === true) {
-        health = { healthy: false, reason: "black-frame" };
+      if (health.healthy && await visual(tab) === true) {
+        health = { healthy: false, protected: health.protected === true,
+          reason: health.protected ? "black-frame-protected-input" : "black-frame" };
       }
       return { tab, health, checkpoint, loadingSince, loadingStalled };
     }));
@@ -132,16 +133,23 @@ export function scanManagedTabs(trigger = "alarm", { now = Date.now, probe = pro
       if (timestamp - Number(record.lastProbeAt || timestamp) > 5 * 60_000) record.unhealthySince = 0;
       record.lastProbeAt = timestamp;
       record.lastHealthReason = health.reason;
+      // A timed-out probe cannot tell whether a previously observed draft is
+      // still present. Only a fresh page result may clear this protection.
+      if (health.protected === true) record.lastProtectedInput = true;
+      else if (!["probe-timeout", "probe-unavailable", "probe-empty"].includes(health.reason)) {
+        record.lastProtectedInput = false;
+      }
       if (checkpoint?.resumable) record.taskCheckpoint = checkpoint;
       else if (checkpoint && health.healthy) record.taskCheckpoint = checkpoint;
       record.lastTrigger = trigger;
-      if (health.healthy || health.protected) {
+      if (health.healthy) {
         record.unhealthySince = 0;
         record.status = "healthy";
         continue;
       }
       record.unhealthySince ||= timestamp;
-      record.status = "suspect";
+      record.status = record.lastProtectedInput ? "protected-suspect" : "suspect";
+      if (record.lastProtectedInput) continue;
       if (timestamp - record.unhealthySince < UNHEALTHY_MS) continue;
       if (record.lastRecoveryAt && timestamp - record.lastRecoveryAt < COOLDOWN_MS) continue;
       if (!record.budgetStartedAt || timestamp - record.budgetStartedAt >= BUDGET_MS) {
@@ -162,10 +170,16 @@ export function scanManagedTabs(trigger = "alarm", { now = Date.now, probe = pro
         || (current.pendingUrl && !samePage(current.pendingUrl, tab.url))) continue;
       // Recheck draft/navigation immediately before the destructive unload.
       let finalHealth = await probe(tab.id);
-      if (finalHealth.healthy && !finalHealth.protected && await visual(current) === true) {
-        finalHealth = { healthy: false, reason: "black-frame" };
+      if (finalHealth.healthy && await visual(current) === true) {
+        finalHealth = { healthy: false, protected: finalHealth.protected === true,
+          reason: finalHealth.protected ? "black-frame-protected-input" : "black-frame" };
       }
-      if (finalHealth.healthy || finalHealth.protected) { record.unhealthySince = 0; continue; }
+      if (finalHealth.protected === true) record.lastProtectedInput = true;
+      else if (!["probe-timeout", "probe-unavailable", "probe-empty"].includes(finalHealth.reason)) {
+        record.lastProtectedInput = false;
+      }
+      if (finalHealth.healthy) { record.unhealthySince = 0; continue; }
+      if (record.lastProtectedInput) { record.status = "protected-suspect"; continue; }
       const canonical = scripts.some(script => canonicalTaskScript(script) && userScriptMatches(script, current.url));
       const recoveryURL = recoveryDestination(current, data["fabushi.userscriptRecovery.v1"], canonical);
       record.recoveryCount += 1;
