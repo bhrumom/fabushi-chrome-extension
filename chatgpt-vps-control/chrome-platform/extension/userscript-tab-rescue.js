@@ -3,6 +3,7 @@ export const RESCUE_KEY = "fabushi.tabRescue.v1";
 export const RESTORE_SETTLE_MS = 120_000;
 export const TRANSIT_TIMEOUT_MS = 30_000;
 const operations = new Map();
+const restorations = new Map();
 let storageQueue = Promise.resolve();
 function changePending(operation) {
   const result = storageQueue.then(async () => {
@@ -69,12 +70,21 @@ async function terminateHungExecution(tabId) {
   } finally { clearTimeout(timer); }
 }
 
-export async function restoreRescue(tabId) {
+export function restoreRescue(tabId) {
+  if (restorations.has(tabId)) return restorations.get(tabId);
+  const operation = restoreRecordedRescue(tabId).finally(() => restorations.delete(tabId));
+  restorations.set(tabId, operation);
+  return operation;
+}
+
+async function restoreRecordedRescue(tabId) {
   const records = (await chrome.storage.session.get(RESCUE_KEY))[RESCUE_KEY] || {};
   const record = records[tabId];
   if (!record) return false;
   const tab = await chrome.tabs.get(tabId).catch(() => null);
-  if (!tab || (tab.url !== record.transitURL && !samePage(tab.url, record.sourceURL))) {
+  if (!tab || (tab.url !== record.transitURL && !samePage(tab.url, record.sourceURL))
+    || (tab.pendingUrl && tab.pendingUrl !== record.transitURL
+      && !samePage(tab.pendingUrl, record.sourceURL))) {
     await changePending(current => { if (current[tabId]?.transitURL === record.transitURL) delete current[tabId]; });
     return false;
   }
@@ -127,7 +137,7 @@ export async function restoreRescue(tabId) {
       const discarded = await chrome.tabs.discard(tabId);
       const restoredId = Number.isInteger(discarded?.id) ? discarded.id : tabId;
       if (restoredId !== tabId) await transferRescueTab(restoredId, tabId);
-      return restoreRescue(restoredId);
+      return restoredId === tabId ? restoreRecordedRescue(restoredId) : restoreRescue(restoredId);
     }
     // An already dispatched navigation needs time to commit. Never reset its
     // persisted clock by starting terminate/transit again on every alarm.
@@ -146,7 +156,12 @@ export function rescueSameTab(tabId, sourceURL, recoveryURL, { allowLoading = fa
     if (!webURL(sourceURL) || !webURL(recoveryURL) || !samePage(sourceURL, recoveryURL)) throw Error("invalid-recovery-target");
     let tab = await chrome.tabs.get(tabId);
     if ((tab.status === "loading" && !allowLoading) || !samePage(tab.url, sourceURL) || (tab.pendingUrl && !samePage(tab.pendingUrl, sourceURL))) throw Error("tab-loading-or-navigated");
-    const transitURL = chrome.runtime.getURL("tab-rescue.html") + "#" + crypto.randomUUID();
+    // Spanning extensions cannot load their packaged pages in incognito main frames.
+    // An opaque blank document unloads the renderer without a remote origin or
+    // changing extension-wide incognito isolation and storage semantics.
+    const nonce = crypto.randomUUID();
+    const transitURL = tab.incognito ? "about:blank#fabushi-rescue=" + nonce
+      : chrome.runtime.getURL("tab-rescue.html") + "#" + nonce;
     await changePending(records => { records[tabId] = { sourceURL, recoveryURL, transitURL, stage: "prepared", startedAt: Date.now(), allowLoading }; });
     // Chrome can replace the extension tab ID on discard. Use the same
     // browser-initiated navigation for inactive tabs to retain numeric identity.
@@ -175,4 +190,17 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return { ok: await restoreRescue(sender.tab.id) };
   })().then(sendResponse, error => sendResponse({ ok: false, error: String(error.message) }));
   return true;
+});
+
+// Incognito transit cannot run an extension-page ready message. Browser events
+// wake MV3 independently of the unloaded renderer; watchdog is the restart fallback.
+chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
+  if (changeInfo.status !== "complete") return;
+  void (async () => {
+    const records = (await chrome.storage.session.get(RESCUE_KEY))[RESCUE_KEY] || {};
+    const record = records[tabId];
+    if (!record) return;
+    const tab = await chrome.tabs.get(tabId).catch(() => null);
+    if (tab?.url === record.transitURL) await restoreRescue(tabId);
+  })().catch(() => {});
 });
