@@ -26,7 +26,15 @@ AC3: Restore the reported tab using retained destination if available; record re
 Back up installed files and preserve extension ID/storage. Update the existing unpacked extension and reload that extension only. Roll back changed files if necessary. No split-mode migration or new permissions.
 
 ## Compliance
-Pending implementation and verification; final per-requirement evidence is required before completion.
+| Requirement / acceptance | Status | Evidence / remaining boundary |
+| --- | --- | --- |
+| R1, R2, R4 / AC1 | passed | 30 recovery regressions; normal and incognito active/inactive transit, completion deduplication, worker restart, legacy blocked records, foreign navigation and unrecorded blank protection. |
+| R3 / AC1 | passed | 95 regression tests; real Chrome 156 packaged incognito watchdog recovery retains tab ID, index/group/window, active state and localStorage checkpoint; existing task bootstrap integration passes. Packaged Agent restart keeps sendPromptCount=1. |
+| R5 / AC2 source and package | passed | PR #28 head 6e8b16f7cdf17a9d2d2ce14c2d9a3d4d88b0cfab run 41425168752; release source 10bfcbb24e9556e0cb8df38375ce378757a46d67 run 41425410657. GitHub v0.7.3 package SHA256 74713617c48daacaa05600005ce76b73efd5983c254a1cd4ed2bc6032b97e2d0 verified after download. |
+| R5 installed files | passed | Existing unpacked extension backed up, all published files copied in place and byte-verified; no storage reset. |
+| R5 active runtime / AC3 | blocked | Chrome background use is disabled in Work settings. Foreground permission requested to reload the existing extension and restore the reported tab; no active-runtime or reported-tab recovery claimed yet. |
+
+Published evidence: [release Chrome evidence](https://github.com/bhrumom/fabushi-chrome-extension/releases/download/v0.7.3/packaged-chrome-e2e.json). New natural-hang endurance acceptance is separate from controlled watchdog testing.
 
 ## References
 Existing automatic-hung-tab-recovery.md and bounded-loading-discard-recovery.md.
