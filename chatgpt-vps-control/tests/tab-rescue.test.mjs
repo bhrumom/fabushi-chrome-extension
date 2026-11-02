@@ -4,6 +4,7 @@ import assert from "node:assert/strict";
 const events = [], session = {}, local = {};
 const url = "https://chatgpt.com/c/recovery-test";
 let tabs = [];
+let onUpdated;
 const clone = value => structuredClone(value);
 const storage = data => ({
   get: async keys => Object.fromEntries((Array.isArray(keys) ? keys : [keys]).map(key => [key, clone(data[key])])),
@@ -13,6 +14,7 @@ globalThis.chrome = {
   storage: { local: storage(local), session: storage(session) },
   runtime: { getURL: path => `chrome-extension://fabushi/${path}`, onMessage: { addListener() {} } },
   tabs: {
+    onUpdated: { addListener(listener) { onUpdated = listener; } },
     query: async () => clone(tabs),
     get: async id => { const tab = tabs.find(tab => tab.id === id); if (!tab) throw Error("closed"); return clone(tab); },
     discard: async id => { events.push(["discard", id]); const tab = tabs.find(tab => tab.id === id); if (tab.active) throw Error("active"); tab.discarded = true; return clone(tab); },
@@ -256,4 +258,59 @@ for(const kind of ['discard','replacement','protected','moved','refused'])test(`
    else {assert.equal(tabs[0].url,resume); assert.equal(tabs[0].id,kind==='replacement'?11:10);assert.equal(tabs[0].index,2);assert.equal(tabs[0].groupId,8);assert.deepEqual(session[RESCUE_KEY],{});}
   }
  }finally{chrome.tabs.update=original.update;chrome.tabs.discard=original.discard;chrome.scripting.executeScript=original.executeScript;}
+});
+
+for (const active of [false, true]) test(`incognito ${active ? "active" : "inactive"} tab uses browser-owned transit and exact checkpoint`, async () => {
+  reset(); Object.assign(tabs[0], { incognito: true, active });
+  const resume = url + "#fabushi-resume=same-owner-round-token";
+  await rescueSameTab(10, url, resume);
+  assert.match(tabs[0].url, /^about:blank#fabushi-rescue=[a-f0-9-]+$/);
+  assert.equal(session[RESCUE_KEY][10].transitURL, tabs[0].url);
+  assert.equal(events.filter(e => e[0] === "update").length, 1);
+  await restoreRescue(10);
+  assert.equal(tabs[0].url, resume);
+  assert.equal(tabs[0].id, 10); assert.equal(tabs[0].index, 2); assert.equal(tabs[0].groupId, 8);
+  assert.equal(tabs[0].active, active);
+  assert.equal(events.some(e => e[0] === "discard"), false);
+  assert.deepEqual(session[RESCUE_KEY], {});
+});
+test("background complete event restores incognito transit without page script or ready message", async () => {
+  reset(); tabs[0].incognito = true;
+  await rescueSameTab(10, url, url + "#fabushi-resume=event");
+  onUpdated(10, { status: "loading" });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.match(tabs[0].url, /^about:blank#/);
+  onUpdated(10, { status: "complete" });
+  onUpdated(10, { status: "complete" });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(tabs[0].url, url + "#fabushi-resume=event");
+  assert.equal(events.filter(e => e[0] === "update").length, 2);
+});
+for (const transit of ["about:blank#fabushi-rescue=saved", "chrome-extension://fabushi/tab-rescue.html#legacy-blocked"]) {
+  test(`worker restart restores exact persisted incognito transit: ${transit}`, async () => {
+    reset(); Object.assign(tabs[0], { incognito: true, url: transit });
+    session[RESCUE_KEY] = { 10: { sourceURL: url, recoveryURL: url + "#fabushi-resume=saved", transitURL: transit, stage: "prepared" } };
+    await Promise.all([restoreRescue(10), restoreRescue(10)]);
+    assert.equal(tabs[0].url, url + "#fabushi-resume=saved");
+    assert.equal(events.filter(e => e[0] === "update").length, 1);
+    assert.ok(session[WATCHDOG_KEY][10].settleUntil > Date.now());
+    assert.deepEqual(session[RESCUE_KEY], {});
+  });
+}
+for (const kind of ["current", "pending"]) test(`incognito transit respects foreign ${kind} navigation`, async () => {
+  reset(); tabs[0].incognito = true;
+  await rescueSameTab(10, url, url);
+  if (kind === "current") tabs[0].url = "about:blank#unrelated";
+  else tabs[0].pendingUrl = "https://example.com/user-navigation";
+  events.length = 0;
+  assert.equal(await restoreRescue(10), false);
+  assert.equal(events.length, 0);
+  assert.deepEqual(session[RESCUE_KEY], {});
+});
+test("unrecorded incognito blank document is never adopted", async () => {
+  reset(); Object.assign(tabs[0], { incognito: true, url: "about:blank#fabushi-rescue=unknown" });
+  onUpdated(10, { status: "complete" });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(await restoreRescue(10), false);
+  assert.equal(events.length, 0);
 });

@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import assert from "node:assert/strict";
+import { createServer } from "node:http";
 import { createHash } from "node:crypto";
 import { spawn } from "node:child_process";
 import {
@@ -436,11 +437,63 @@ async function exampleTabCount(page) {
   })`)).value || 0);
 }
 
+async function verifyIncognitoRescue() {
+  // Enable incognito only inside this disposable CI profile using Chrome's own
+  // extensions settings API. The production manifest remains spanning.
+  const settings = await cdp.send("Target.createTarget", { url: "chrome://extensions/" });
+  const attached = await cdp.send("Target.attachToTarget", { targetId: settings.targetId, flatten: true });
+  await waitFor(async () => (await evaluate(attached.sessionId,
+    `Boolean(globalThis.chrome?.developerPrivate?.updateExtensionConfiguration)`)).value, "extension settings API");
+  await evaluate(attached.sessionId, `new Promise((resolve, reject) => {
+    chrome.developerPrivate.updateExtensionConfiguration({extensionId:${JSON.stringify(extensionId)}, incognitoAccess:true}, () => {
+      const error = chrome.runtime.lastError; if (error) reject(Error(error.message)); else resolve(true);
+    });
+  })`);
+  await cdp.send("Target.closeTarget", { targetId: settings.targetId });
+  const server = createServer((req, res) => {
+    res.writeHead(200, { "content-type": "text/html" });
+    res.end("<!doctype html><title>Incognito rescue fixture</title><p>Same-tab recovery</p>");
+  });
+  await new Promise(resolve => server.listen(0, "127.0.0.1", resolve));
+  let privateWindow;
+  const worker = await waitFor(() => extensionWorker(extensionId), "rescue worker");
+  const workerSession = (await cdp.send("Target.attachToTarget", { targetId: worker.targetId, flatten: true })).sessionId;
+  const run = async expression => (await evaluate(workerSession, expression)).value;
+  try {
+    const source = `http://127.0.0.1:${server.address().port}/same-task`;
+    privateWindow = await run(`chrome.windows.create({incognito:true,focused:false,url:${JSON.stringify(source)}})`);
+    const tabId = privateWindow.tabs[0].id;
+    await waitFor(async () => (await run(`chrome.tabs.get(${tabId})`)).status === "complete", "incognito source");
+    await run(`chrome.scripting.executeScript({target:{tabId:${tabId}},func:()=>localStorage.setItem('rescue-checkpoint',JSON.stringify({taskId:'same-task',round:7,token:'original-send',attempted:true}))})`);
+    const before = await run(`chrome.tabs.get(${tabId})`);
+    const recoveryURL = source + "#fabushi-resume=original-checkpoint";
+    const result = await run(`import(chrome.runtime.getURL('userscript-tab-rescue.js')).then(m=>m.rescueSameTab(${tabId},${JSON.stringify(source)},${JSON.stringify(recoveryURL)}))`);
+    await waitFor(async () => {
+      const tab = await run(`chrome.tabs.get(${tabId})`);
+      return tab.url === recoveryURL && tab.status === "complete";
+    }, "incognito blank transit returned to original route");
+    const after = await run(`chrome.tabs.get(${tabId})`);
+    assert.equal(after.id, before.id); assert.equal(after.index, before.index);
+    assert.equal(after.windowId, before.windowId); assert.equal(after.groupId, before.groupId);
+    assert.equal(after.incognito, true); assert.equal(after.active, before.active);
+    const checkpoint = await run(`chrome.scripting.executeScript({target:{tabId:${tabId}},func:()=>({checkpoint:JSON.parse(localStorage.getItem('rescue-checkpoint')),href:location.href})})`);
+    assert.deepEqual(checkpoint[0].result.checkpoint, {taskId:'same-task',round:7,token:'original-send',attempted:true});
+    assert.equal(checkpoint[0].result.href, recoveryURL);
+    const records = await run(`chrome.storage.session.get('fabushi.tabRescue.v1')`);
+    assert.equal(records['fabushi.tabRescue.v1']?.[tabId], undefined);
+    return { passed:true, tabId, sameTab:true, checkpointPreserved:true, recoveryURL, action:result.action };
+  } finally {
+    if (privateWindow?.id) await run(`chrome.windows.remove(${privateWindow.id})`).catch(() => {});
+    await new Promise(resolve => server.close(resolve));
+  }
+}
+
 try {
   // Native Messaging manifest is already present before this browser process
   // starts. Load the exact unpacked verify/ package through Chrome's extension
   // debugging domain, then independently verify chrome.runtime.id in app.html.
   await loadExactExtension();
+  const incognitoRescue = await verifyIncognitoRescue();
 
   let page = await openApp(extensionId);
   await waitNative(page);
@@ -497,6 +550,7 @@ try {
   const browserVersion = await cdp.send("Browser.getVersion");
   const evidence = {
     schemaVersion: 1,
+    incognitoRescue,
     sourceSha: packagedProvenance.sourceSha,
     extensionVersion: packagedManifest.version,
     extensionId,
