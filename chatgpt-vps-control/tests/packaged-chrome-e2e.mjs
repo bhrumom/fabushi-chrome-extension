@@ -341,12 +341,13 @@ async function openApp(extensionId) {
 }
 
 async function evaluate(sessionId, expression) {
-  const result = await cdp.send("Runtime.evaluate", {
+  let result;
+  try { result = await cdp.send("Runtime.evaluate", {
     expression,
     awaitPromise: true,
     returnByValue: true,
     userGesture: true
-  }, sessionId);
+  }, sessionId); } catch (error) { throw new Error(`${error.message}; expression=${expression.slice(0, 140)}`); }
   if (result.exceptionDetails) {
     const description = result.exceptionDetails.exception?.description
       || result.exceptionDetails.exception?.value
@@ -444,11 +445,11 @@ async function verifyIncognitoRescue() {
   const attached = await cdp.send("Target.attachToTarget", { targetId: settings.targetId, flatten: true });
   await waitFor(async () => (await evaluate(attached.sessionId,
     `Boolean(globalThis.chrome?.developerPrivate?.updateExtensionConfiguration)`)).value, "extension settings API");
-  await evaluate(attached.sessionId, `new Promise((resolve, reject) => {
-    chrome.developerPrivate.updateExtensionConfiguration({extensionId:${JSON.stringify(extensionId)}, incognitoAccess:true}, () => {
-      const error = chrome.runtime.lastError; if (error) reject(Error(error.message)); else resolve(true);
-    });
-  })`);
+  await evaluate(attached.sessionId, `(() => {
+    chrome.developerPrivate.updateExtensionConfiguration({extensionId:${JSON.stringify(extensionId)}, incognitoAccess:true});
+    return true;
+  })()`);
+  console.log("Incognito rescue: extension access requested");
   await cdp.send("Target.closeTarget", { targetId: settings.targetId });
   const server = createServer((req, res) => {
     res.writeHead(200, { "content-type": "text/html" });
@@ -459,12 +460,15 @@ async function verifyIncognitoRescue() {
   const worker = await waitFor(() => extensionWorker(extensionId), "rescue worker");
   const workerSession = (await cdp.send("Target.attachToTarget", { targetId: worker.targetId, flatten: true })).sessionId;
   const run = async expression => (await evaluate(workerSession, expression)).value;
+  await waitFor(async () => await run(`chrome.extension.isAllowedIncognitoAccess()`), "incognito extension permission");
+  console.log("Incognito rescue: extension access confirmed");
   try {
     const source = `http://127.0.0.1:${server.address().port}/same-task`;
     privateWindow = await run(`chrome.windows.create({incognito:true,focused:false,url:${JSON.stringify(source)}})`);
     const tabId = privateWindow.tabs[0].id;
     await waitFor(async () => (await run(`chrome.tabs.get(${tabId})`)).status === "complete", "incognito source");
     await run(`chrome.scripting.executeScript({target:{tabId:${tabId}},func:()=>localStorage.setItem('rescue-checkpoint',JSON.stringify({taskId:'same-task',round:7,token:'original-send',attempted:true}))})`);
+    console.log("Incognito rescue: source checkpoint prepared");
     const before = await run(`chrome.tabs.get(${tabId})`);
     const recoveryURL = source + "#fabushi-resume=original-checkpoint";
     const result = await run(`import(chrome.runtime.getURL('userscript-tab-rescue.js')).then(m=>m.rescueSameTab(${tabId},${JSON.stringify(source)},${JSON.stringify(recoveryURL)}))`);
