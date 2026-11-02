@@ -246,18 +246,34 @@ test("viewport sampling distinguishes a uniformly black frame from dark-mode con
     globalThis.OffscreenCanvas = previous.canvas;
   }
 });
-test("protected DOM input and inconclusive captures never trigger black-frame rescue", async () => {
+test("protected DOM input is diagnosed but never unloaded until a fresh unprotected probe", async () => {
   reset(); tabs[0].active = true; tabs[0].windowId = 3;
   let time = 1_000_000, calls = 0;
   const visual = async () => { calls++; return true; };
   await scanManagedTabs("protected", { now: () => time,
     probe: async () => ({ healthy: true, protected: true }), visual });
-  assert.equal(calls, 0);
+  assert.equal(calls, 1);
+  assert.equal(session[WATCHDOG_KEY][10].lastHealthReason, "black-frame-protected-input");
+  assert.equal(session[WATCHDOG_KEY][10].status, "protected-suspect");
   time += 90_000;
-  await scanManagedTabs("inconclusive", { now: () => time,
-    probe: async () => ({ healthy: true }), visual: async () => null });
+  await scanManagedTabs("timeout-after-draft", { now: () => time, probe: failed, visual });
+  assert.equal(events.length, 0);
+  assert.equal(session[WATCHDOG_KEY][10].lastProtectedInput, true);
+  await scanManagedTabs("draft-cleared", { now: () => time,
+    probe: async () => ({ healthy: true, protected: false, reason: "content-visible" }), visual });
+  assert.equal(events.filter(event => event[0] === "Runtime.terminateExecution").length, 1);
+});
+test("inconclusive capture after protected input clears suspicion only when rendered content is healthy", async () => {
+  reset(); tabs[0].active = true; tabs[0].windowId = 3;
+  let time = 1_000_000;
+  await scanManagedTabs("protected-black", { now: () => time,
+    probe: async () => ({ healthy: true, protected: true }), visual: async () => true });
+  time += 90_000;
+  await scanManagedTabs("healthy-dark-mode", { now: () => time,
+    probe: async () => ({ healthy: true, protected: false, reason: "content-visible" }), visual: async () => false });
   assert.equal(events.length, 0);
   assert.equal(session[WATCHDOG_KEY][10].unhealthySince, 0);
+  assert.equal(session[WATCHDOG_KEY][10].lastProtectedInput, false);
 });
 test("worker eviction after persisting destination resumes unload in the same tab", async () => {
   reset();
