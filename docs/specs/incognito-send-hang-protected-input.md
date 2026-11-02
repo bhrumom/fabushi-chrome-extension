@@ -30,6 +30,6 @@ The extension worker samples the viewport as before. Its watchdog stores only a 
 
 | Item | Status | Evidence |
 | --- | --- | --- |
-| R1-R4 | pending | Implementation and review pending. |
-| R5 tests and Actions | pending | Exact-head run pending. |
+| R1-R4 | passed in source | `userscript-watchdog.js` distinguishes `black-frame-protected-input`, retains `lastProtectedInput` across inconclusive probes, blocks automatic unload while protected, and keeps the existing same-tab rescue path. |
+| R5 tests and Actions | passed for candidate | PR #33 head `0e3eace` passed validate and package in Actions 41500017776 attempt 2. The first package attempt failed before browser assertions because Chrome CDP was not ready; rerun passed. Protected black frame, timeout after draft, later unprotected recovery, and ordinary dark content are covered by `tab-rescue.test.mjs`. |
 | Installed natural hang | pending | The second same-document isolation comparison and natural recovery are pending. |
