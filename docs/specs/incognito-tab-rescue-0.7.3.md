@@ -32,10 +32,13 @@ Back up installed files and preserve extension ID/storage. Update the existing u
 | R3 / AC1 | passed | 95 regression tests; real Chrome 156 packaged incognito watchdog recovery retains tab ID, index/group/window, active state and localStorage checkpoint; existing task bootstrap integration passes. Packaged Agent restart keeps sendPromptCount=1. |
 | R5 / AC2 source and package | passed | PR #28 head 6e8b16f7cdf17a9d2d2ce14c2d9a3d4d88b0cfab run 41425168752; release source 10bfcbb24e9556e0cb8df38375ce378757a46d67 run 41425410657. GitHub v0.7.3 package SHA256 74713617c48daacaa05600005ce76b73efd5983c254a1cd4ed2bc6032b97e2d0 verified after download. |
 | R5 installed files | passed | Existing unpacked extension backed up, all published files copied in place and byte-verified; no storage reset. |
-| R5 active runtime / AC3 | blocked | Chrome background use is disabled in Work settings. Foreground permission requested to reload the existing extension and restore the reported tab; no active-runtime or reported-tab recovery claimed yet. |
+| R5 active runtime / AC3 | passed | After explicit foreground authorization, Chrome runtime.getManifest and extension details both read 0.7.3. Recovered persisted task d56b3d1d-6125-4f6f-a8d8-e7e36728a1ba, original owner and round 2. The site subsequently hung; installed recovery recorded browser-owned about:blank transit and migrated the discarded tab ID. Visible task processing resumed at conversation 6ae8720c-8c98-83e8-85fc-ba96ed8ac1fe with Running command and Stop controls. No goal was manually resent. |
 
 Published evidence: [release Chrome evidence](https://github.com/bhrumom/fabushi-chrome-extension/releases/download/v0.7.3/packaged-chrome-e2e.json). New natural-hang endurance acceptance is separate from controlled watchdog testing.
 
 ## References
 Existing automatic-hung-tab-recovery.md and bounded-loading-discard-recovery.md.
 Chrome manifest incognito: https://developer.chrome.com/docs/extensions/reference/manifest/incognito
+
+## Installed recovery boundary
+Chrome closed the old blocked extension-origin error tab during extension reload. The retained incognito window preserved origin storage; manual recovery used the saved task URL and the existing host recovery ticket adapter. The following blank renderer needed browser discard after moving focus to a temporary blank tab, then returned in the original slot; that helper tab was removed. This manual upgrade recovery does not prove that active-tab discard will always be permitted without a focus change.
